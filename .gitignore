@@ -1,0 +1,30 @@
+# Gradle
+.gradle/
+build/
+
+# Minecraft dev runtime
+runs/
+
+# IDE
+.idea/
+*.iml
+*.iws
+*.ipr
+bin/
+out/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude Code
+.claude/
+
+# Java
+*.class
+*.jar
+*.war
+!gradle/wrapper/gradle-wrapper.jar
+
+# Misc
+local.properties

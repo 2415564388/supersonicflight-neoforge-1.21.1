@@ -1,0 +1,24 @@
+{
+  "sonic_boom": {
+    "category": "player",
+    "sounds": [
+      "supersonicflight:sonic_boom"
+    ]
+  },
+  "wind_loop": {
+    "category": "player",
+    "sounds": [
+      {
+        "name": "supersonicflight:wind_loop",
+        "stream": true
+      }
+    ]
+  },
+  "takeoff": {
+    "category": "player",
+    "subtitle": "subtitles.supersonicflight.takeoff",
+    "sounds": [
+      "supersonicflight:takeoff2"
+    ]
+  }
+}

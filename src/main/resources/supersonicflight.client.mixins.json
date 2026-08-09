@@ -1,0 +1,17 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "com.baranhan123.supersonicflight.client.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "refmap": "supersonicflight.refmap.json",
+  "client": [
+    "AbstractClientPlayerMixin",
+    "FlightCameraMixin",
+    "GameRendererMixin",
+    "ItemInHandRendererMixin",
+    "PostChainAccessor"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}
