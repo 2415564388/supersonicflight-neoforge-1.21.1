@@ -40,15 +40,15 @@
 
 | 阶段 | 速度 | 说明 |
 |---|---|---|
-| **LAUNCH** | 6 方块/tick（垂直） | 持续 10 tick，脚下爆发火焰粒子，可选地形破坏 |
+| **LAUNCH** | 6 方块/tick（垂直） | 持续 10 tick，脚下爆发火焰粒子，可破坏脚下方块；起飞瞬间自动打通头顶方块（`breakBlocksAboveOnTakeoff`），即使在山洞/地底起飞也不会被天花板卡住 |
 | **HOVER** | 2 方块/tick | WASD 方向飞行，无鞘翅姿势 |
-| **SONIC** | 9 方块/tick（可配置） | 超音速飞行，超人俯冲姿势，FOV 拉伸，马赫环特效 |
+| **SONIC** | 9 方块/tick（可配置） | 超音速飞行，超人俯冲姿势，FOV 平滑拉伸，速度线与马赫环特效 |
 
 ### 碰撞效果
 
 在 **SONIC** 模式下撞击地面或墙壁：
 - 破坏周围方块（硬度 < 50，半径可配置）
-- 对周围 6 格内生物造成 50 倍攻击力的爆炸伤害
+- 对周围 6 格内生物造成 50 倍攻击力的**真实伤害**（无视护甲与抗性）
 - 触发屏幕震动和音爆音效
 
 ---
@@ -64,7 +64,10 @@
   "maxFlightSpeed": 9.0,
   "breakBlocksOnTakeoff": true,
   "breakBlocksOnImpact": true,
-  "destructionRadius": 8
+  "destructionRadius": 8,
+  "breakBlocksAboveOnTakeoff": true,
+  "takeoffClearRadius": 1,
+  "takeoffClearHeight": 64
 }
 ```
 
@@ -74,13 +77,18 @@
 | `breakBlocksOnTakeoff` | true | 起飞时是否破坏脚下方块 |
 | `breakBlocksOnImpact` | true | SONIC 撞击地面/墙壁时是否破坏方块 |
 | `destructionRadius` | 8 | 破坏方块的圆形半径（格） |
+| `breakBlocksAboveOnTakeoff` | true | 垂直起飞时是否自动打通头顶方块（防止被天花板挡住） |
+| `takeoffClearRadius` | 1 | 起飞打通头顶时的水平半径（格） |
+| `takeoffClearHeight` | 64 | 起飞时一次性打通头顶的高度（格） |
 
 ### `supersonicflight-client.json` — 客户端配置
 
 ```json
 {
   "enableFovEffect": true,
-  "fovMultiplier": 11.0,
+  "fovMultiplier": 1.5,
+  "fovMaxHorizontal": 150.0,
+  "fovSmooth": 0.15,
   "enableWindLoopSound": true,
   "windVolumeMultiplier": 1.0
 }
@@ -88,10 +96,14 @@
 
 | 参数 | 默认值 | 说明 |
 |---|---|---|
-| `enableFovEffect` | true | SONIC 模式下是否启用 FOV 拉伸效果 |
-| `fovMultiplier` | 11.0 | FOV 倍率（值越大速度感越强） |
+| `enableFovEffect` | true | 超音速飞行时是否启用 FOV 拉伸效果 |
+| `fovMultiplier` | 1.5 | **垂直** FOV 放大倍数（SONIC 满效果、LAUNCH 半程，有效范围 1.0–2.0） |
+| `fovMaxHorizontal` | 150.0 | 水平 FOV 上限（度），防止超宽屏画面过度拉伸/鱼眼变形 |
+| `fovSmooth` | 0.15 | FOV 拉升与回落的速度平滑系数（0.02–1.0，越大响应越快） |
 | `enableWindLoopSound` | true | 飞行中是否播放循环风声 |
 | `windVolumeMultiplier` | 1.0 | 风声总音量倍率 |
+
+> 旧版本把 `fovMultiplier` 当作绝对倍率（如 11.0）。检测到这类旧数值时模组会自动重置为新的 1.5 默认值。
 
 ### `supersonicflight-camera.json` — 相机配置
 
@@ -115,6 +127,7 @@
 
 ## 视觉效果
 
+- **速度线**：超音速（SONIC）飞行与起飞瞬间，画面内会出现向后拖曳的白色速度线
 - **马赫环**：起飞、进入超音速、撞击地面时出现白色冲击环
 - **屏幕着色器**：超音速飞行时的屏幕震动、色差分离和进入瞬间的白色闪光
 - **相机倾斜**：转弯时画面随速度侧倾
