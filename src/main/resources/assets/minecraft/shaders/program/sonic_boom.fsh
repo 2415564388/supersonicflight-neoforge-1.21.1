@@ -28,7 +28,7 @@ void main() {
 
     float takeoffShakeOffset = 0.0;
     if (TakeoffShake > 0.0) {
-        takeoffShakeOffset = sin(Time * 150.0) * 0.02 * TakeoffShake;
+        takeoffShakeOffset = sin(Time * 150.0) * 0.032 * TakeoffShake;
     }
 
     if (throttleShakeIntensity > 0.0 || TakeoffShake > 0.0) {
@@ -64,7 +64,7 @@ void main() {
         float dist = distance(texCoord, center);
         // Flash strongest at center, weaker at edges — radial burst feel
         float radial = 1.0 - smoothstep(0.0, 0.7, dist);
-        float flash = FlashIntensity * radial * 0.55;
+        float flash = FlashIntensity * radial * 0.7;
         finalColor.rgb = mix(finalColor.rgb, vec3(1.0, 1.0, 1.0), flash);
     }
 

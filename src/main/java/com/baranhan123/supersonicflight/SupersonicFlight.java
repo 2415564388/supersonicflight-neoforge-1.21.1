@@ -3,13 +3,16 @@ package com.baranhan123.supersonicflight;
 import com.baranhan123.supersonicflight.command.SupersonicFlightCommand;
 import com.baranhan123.supersonicflight.config.SupersonicConfig;
 import com.baranhan123.supersonicflight.registry.ModSounds;
+import com.mojang.logging.LogUtils;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.common.Mod;
 import net.neoforged.neoforge.common.NeoForge;
+import org.slf4j.Logger;
 
 @Mod(SupersonicFlight.MOD_ID)
 public class SupersonicFlight {
     public static final String MOD_ID = "supersonicflight";
+    public static final Logger LOGGER = LogUtils.getLogger();
 
     public SupersonicFlight(IEventBus modEventBus) {
         SupersonicConfig.load();

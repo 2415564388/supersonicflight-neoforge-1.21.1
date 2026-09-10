@@ -28,6 +28,9 @@ public class SonicBoomEffect {
     private static long impactTime = 0;
     private static boolean wasSonic = false;
     private static FlightState prevState = FlightState.NONE;
+    /** Last known window size so the PostChain can be re-sized when the window changes. */
+    private static int lastPostChainWidth = -1;
+    private static int lastPostChainHeight = -1;
 
     /** Called by MachDiskManager when ground impact detected */
     public static void triggerImpact() {
@@ -96,6 +99,18 @@ public class SonicBoomEffect {
                 postChain = new PostChain(mc.getTextureManager(), mc.getResourceManager(),
                         mc.getMainRenderTarget(), SHADER_LOC);
                 postChain.resize(mc.getWindow().getWidth(), mc.getWindow().getHeight());
+                lastPostChainWidth = mc.getWindow().getWidth();
+                lastPostChainHeight = mc.getWindow().getHeight();
+            } else {
+                // The window can change size (e.g. maximizing) while the chain is alive; keep its
+                // internal render targets in sync or the full-screen effect renders at a stale size.
+                int windowWidth = mc.getWindow().getWidth();
+                int windowHeight = mc.getWindow().getHeight();
+                if (windowWidth != lastPostChainWidth || windowHeight != lastPostChainHeight) {
+                    postChain.resize(windowWidth, windowHeight);
+                    lastPostChainWidth = windowWidth;
+                    lastPostChainHeight = windowHeight;
+                }
             }
 
             float time = (System.currentTimeMillis() % 100000) / 1000f;

@@ -5,7 +5,6 @@
   "compatibilityLevel": "JAVA_21",
   "refmap": "supersonicflight.refmap.json",
   "client": [
-    "AbstractClientPlayerMixin",
     "FlightCameraMixin",
     "GameRendererMixin",
     "ItemInHandRendererMixin",

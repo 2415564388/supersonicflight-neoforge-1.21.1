@@ -17,6 +17,13 @@ public class SupersonicConfig {
     public boolean breakBlocksOnTakeoff = true;
     public boolean breakBlocksOnImpact = true;
     public int destructionRadius = 8;
+    /** Clear a tube of blocks above the player during the vertical launch so an underground
+     *  takeoff never gets stuck on a ceiling. */
+    public boolean breakBlocksAboveOnTakeoff = true;
+    /** Horizontal radius (in blocks) of the cleared tube above the player during launch. */
+    public int takeoffClearRadius = 1;
+    /** Height (in blocks) of the shaft cleared above the player at the moment of takeoff. */
+    public int takeoffClearHeight = 64;
 
     public static SupersonicConfig INSTANCE = new SupersonicConfig();
 
@@ -27,9 +34,10 @@ public class SupersonicConfig {
             } catch (Exception e) {
                 e.printStackTrace();
             }
-        } else {
-            save();
         }
+        // Persist missing fields (newer options) back into pre-existing config files so every
+        // toggle shows up in the file.
+        save();
     }
 
     public static void save() {

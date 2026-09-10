@@ -17,6 +17,7 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.sounds.SoundEvents;
 import net.minecraft.sounds.SoundSource;
 import net.minecraft.util.RandomSource;
+import net.minecraft.world.damagesource.DamageTypes;
 import net.minecraft.world.entity.item.FallingBlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.neoforged.neoforge.network.handling.IPayloadContext;
@@ -79,14 +80,22 @@ public record FlightLaunchPayload() implements CustomPacketPayload {
                 destroyTerrain(player, serverLevel, SupersonicConfig.INSTANCE.destructionRadius);
             }
 
-            // Damage nearby entities on takeoff (50x player attack damage, explosion type)
+            // Clear a vertical shaft above so an underground takeoff smashes through the ceiling
+            // instead of getting stuck. Done here (packet handler) so it uses the exact position
+            // where the launch was triggered, regardless of server/client movement timing.
+            if (SupersonicConfig.INSTANCE.breakBlocksAboveOnTakeoff) {
+                clearColumnAbove(player, serverLevel);
+            }
+
+            // Damage nearby entities on takeoff (50x player attack damage). Same GENERIC_KILL true
+            // damage as the sonic impact so both bursts behave consistently (bypass armor/resistance).
             float attackDamage = (float) player.getAttributeValue(net.minecraft.world.entity.ai.attributes.Attributes.ATTACK_DAMAGE);
             float damage = attackDamage * 50.0f;
             for (net.minecraft.world.entity.LivingEntity nearby : serverLevel.getEntitiesOfClass(
                     net.minecraft.world.entity.LivingEntity.class,
                     player.getBoundingBox().inflate(5.0))) {
                 if (nearby != player) {
-                    nearby.hurt(serverLevel.damageSources().explosion(player, player), damage);
+                    nearby.hurt(serverLevel.damageSources().source(DamageTypes.GENERIC_KILL, player), damage);
                 }
             }
         });
@@ -137,6 +146,31 @@ public record FlightLaunchPayload() implements CustomPacketPayload {
                     fallingBlock.hasImpulse = true;
                     level.addFreshEntity(fallingBlock);
                     level.destroyBlock(targetPos, false);
+                }
+            }
+        }
+    }
+
+    /**
+     * Breaks a vertical tube of blocks above the player at the moment of takeoff, so the launch
+     * ascent never collides with a ceiling. Only breaks blocks the player could reasonably smash
+     * through (hardness 0..50, skipping air and fluids — never bedrock/obsidian).
+     */
+    public static void clearColumnAbove(ServerPlayer player, ServerLevel level) {
+        int radius = Math.max(0, SupersonicConfig.INSTANCE.takeoffClearRadius);
+        int height = Math.max(0, SupersonicConfig.INSTANCE.takeoffClearHeight);
+        BlockPos feet = player.blockPosition();
+
+        for (int dx = -radius; dx <= radius; dx++) {
+            for (int dz = -radius; dz <= radius; dz++) {
+                for (int dy = 1; dy <= height; dy++) {
+                    BlockPos pos = feet.offset(dx, dy, dz);
+                    BlockState state = level.getBlockState(pos);
+                    if (state.isAir() || !state.getFluidState().isEmpty()) continue;
+                    float hardness = state.getDestroySpeed(level, pos);
+                    if (hardness >= 0.0f && hardness < 50.0f) {
+                        level.destroyBlock(pos, false);
+                    }
                 }
             }
         }

@@ -5,6 +5,7 @@ import com.baranhan123.supersonicflight.network.packet.FlightLaunchPayload;
 import com.baranhan123.supersonicflight.registry.ModSounds;
 import com.baranhan123.supersonicflight.util.FlightState;
 import com.baranhan123.supersonicflight.util.SupersonicFlightPlayer;
+import net.minecraft.core.BlockPos;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.syncher.EntityDataAccessor;
 import net.minecraft.network.syncher.EntityDataSerializers;
@@ -12,10 +13,12 @@ import net.minecraft.network.syncher.SynchedEntityData;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.sounds.SoundSource;
+import net.minecraft.world.damagesource.DamageTypes;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.Vec3;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
@@ -230,6 +233,13 @@ public abstract class PlayerEntityMixin extends LivingEntity implements Superson
             // Counter for flight time
             setFlightTicks(Math.min(400, getFlightTicks() + 1));
 
+            // Clear the tube above so the 6-blocks/tick ascent never gets stuck on a ceiling.
+            if (!level().isClientSide() && SupersonicConfig.INSTANCE.breakBlocksAboveOnTakeoff) {
+                if (level() instanceof ServerLevel serverLevel) {
+                    breakBlocksAbove((Player) (Object) this, serverLevel);
+                }
+            }
+
         } else if (currentState == FlightState.HOVER) {
             // HOVER: W=forward, release=decelerate
             if (isFlightAccelerating()) {
@@ -308,13 +318,15 @@ public abstract class PlayerEntityMixin extends LivingEntity implements Superson
             }
         }
 
-        // Explosion-like damage to nearby entities (50x attack damage)
+        // True damage to nearby entities (50x attack damage). GENERIC_KILL is in the vanilla
+        // minecraft:bypasses_armor / bypasses_resistance tags, so it ignores armor and resistance
+        // (matching the modpack's "真实伤害" convention in hunter_extralevel.js).
         float attackDamage = (float) self.getAttributeValue(net.minecraft.world.entity.ai.attributes.Attributes.ATTACK_DAMAGE);
         float damage = attackDamage * 50.0f;
         for (LivingEntity nearby : self.level().getEntitiesOfClass(LivingEntity.class,
                 self.getBoundingBox().inflate(6.0))) {
             if (nearby != self) {
-                nearby.hurt(self.level().damageSources().explosion(self, self), damage);
+                nearby.hurt(self.level().damageSources().source(DamageTypes.GENERIC_KILL, self), damage);
             }
         }
 
@@ -337,6 +349,34 @@ public abstract class PlayerEntityMixin extends LivingEntity implements Superson
                 sl.sendParticles(net.minecraft.core.particles.ParticleTypes.FIREWORK,
                         self.getX(), self.getY() + 0.5, self.getZ(),
                         20, 1.5, 0.5, 1.5, 0.2);
+            }
+        }
+    }
+
+    /**
+     * Breaks a short tube of blocks directly above the player on each launch tick. The LAUNCH
+     * boost moves 6 blocks/tick, so this clears feet+1 .. feet+12 (a couple of ticks of ascent
+     * plus margin) to keep the next tick's climb free — an underground takeoff smashes through
+     * the ceiling instead of getting stuck against it.
+     */
+    @Unique
+    private void breakBlocksAbove(Player self, ServerLevel level) {
+        int radius = Math.max(0, SupersonicConfig.INSTANCE.takeoffClearRadius);
+        BlockPos feet = self.blockPosition();
+        int startY = feet.getY() + 1;
+        int endY = feet.getY() + 12;
+
+        for (int dx = -radius; dx <= radius; dx++) {
+            for (int dz = -radius; dz <= radius; dz++) {
+                for (int dy = startY; dy <= endY; dy++) {
+                    BlockPos pos = feet.offset(dx, dy, dz);
+                    BlockState state = level.getBlockState(pos);
+                    if (state.isAir() || !state.getFluidState().isEmpty()) continue;
+                    float hardness = state.getDestroySpeed(level, pos);
+                    if (hardness >= 0.0f && hardness < 50.0f) {
+                        level.destroyBlock(pos, false);
+                    }
+                }
             }
         }
     }

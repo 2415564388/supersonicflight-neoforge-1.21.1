@@ -14,7 +14,13 @@ public class SupersonicConfigClient {
     private static final File FILE = new File(FMLPaths.CONFIGDIR.get().toFile(), "supersonicflight-client.json");
 
     public boolean enableFovEffect = true;
-    public float fovMultiplier = 11.0f;
+    /** VERTICAL FOV multiplier during full SONIC (clamped 1.0–2.0 at use). The same value is
+     *  applied at every window size/aspect so resizing the window never jumps the FOV. */
+    public float fovMultiplier = 1.5f;
+    /** Cap for the horizontal FOV in degrees, prevents fish-eye / projection inversion. */
+    public float fovMaxHorizontal = 150.0f;
+    /** Exponential smoothing rate for the FOV ramp (0.02–1.0). */
+    public float fovSmooth = 0.15f;
     public boolean enableWindLoopSound = true;
     public float windVolumeMultiplier = 1.0f;
 
@@ -26,6 +32,12 @@ public class SupersonicConfigClient {
                 INSTANCE = GSON.fromJson(reader, SupersonicConfigClient.class);
             } catch (Exception e) {
                 e.printStackTrace();
+            }
+            // Migrate configs written by older versions: the old fovMultiplier was an absolute
+            // 11.0 modifier (now meaningless), so reset such stale values to the new default.
+            if (INSTANCE.fovMultiplier > 5.0f) {
+                INSTANCE.fovMultiplier = 1.5f;
+                save();
             }
         } else {
             save();
