@@ -38,5 +38,11 @@ public class ModMessages {
                 FlightForwardPayload::handle
         );
 
+        registrar.playToServer(
+                HandPosSyncPayload.TYPE,
+                HandPosSyncPayload.STREAM_CODEC,
+                HandPosSyncPayload::handle
+        );
+
     }
 }

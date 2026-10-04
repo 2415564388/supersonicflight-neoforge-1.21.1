@@ -27,6 +27,11 @@ public class ItemInHandRendererMixin {
         FlightState state = flightPlayer.getFlightState();
         if (state == FlightState.NONE) return;
 
+        // The grab and punch mixins keyframe the arm from the vanilla pose. Leaving this pull
+        // applied would shift that whole keyframed animation, so stand down while either is active.
+        if (flightPlayer.getGrabbedTarget() != null || flightPlayer.isTryingToGrab()) return;
+        if (flightPlayer.getPunchTicks() > 0) return;
+
         float throttle = flightPlayer.getLerpedFlightThrottle(partialTick);
         if (throttle > 0.3f && hand == InteractionHand.MAIN_HAND) {
             poseStack.translate(0, -0.3 * throttle, -0.5 * throttle);

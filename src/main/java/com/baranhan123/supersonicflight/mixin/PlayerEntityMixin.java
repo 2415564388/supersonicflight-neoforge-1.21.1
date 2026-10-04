@@ -4,6 +4,7 @@ import com.baranhan123.supersonicflight.config.SupersonicConfig;
 import com.baranhan123.supersonicflight.network.packet.FlightLaunchPayload;
 import com.baranhan123.supersonicflight.registry.ModSounds;
 import com.baranhan123.supersonicflight.util.FlightState;
+import com.baranhan123.supersonicflight.util.GrabPunchManager;
 import com.baranhan123.supersonicflight.util.SupersonicFlightPlayer;
 import net.minecraft.core.BlockPos;
 import net.minecraft.nbt.CompoundTag;
@@ -48,10 +49,66 @@ public abstract class PlayerEntityMixin extends LivingEntity implements Superson
     private static final EntityDataAccessor<Boolean> FLIGHT_ENABLED =
             SynchedEntityData.defineId(Player.class, EntityDataSerializers.BOOLEAN);
 
+    // Grab & heavy punch (ported from ViltrumiteCore). These MUST stay in this one static
+    // initializer: SynchedEntityData.defineId hands out ids in class-init order, so splitting
+    // Player accessors across two mixins risks a client/server id desync.
+    @Unique
+    private static final EntityDataAccessor<Boolean> TRYING_TO_GRAB =
+            SynchedEntityData.defineId(Player.class, EntityDataSerializers.BOOLEAN);
+    @Unique
+    private static final EntityDataAccessor<Integer> GRABBED_TARGET_ID =
+            SynchedEntityData.defineId(Player.class, EntityDataSerializers.INT);
+    @Unique
+    private static final EntityDataAccessor<Integer> PUNCH_TICKS =
+            SynchedEntityData.defineId(Player.class, EntityDataSerializers.INT);
+    @Unique
+    private static final EntityDataAccessor<Boolean> IS_LEFT_ARM_PUNCH =
+            SynchedEntityData.defineId(Player.class, EntityDataSerializers.BOOLEAN);
+    @Unique
+    private static final EntityDataAccessor<Float> PUNCH_STRENGTH =
+            SynchedEntityData.defineId(Player.class, EntityDataSerializers.FLOAT);
+    @Unique
+    private static final EntityDataAccessor<Integer> PUNCH_COOLDOWN =
+            SynchedEntityData.defineId(Player.class, EntityDataSerializers.INT);
+
     @Unique
     private boolean isClientLocalPlayer = false;
     @Unique
     private float smoothedThrottle = 0.0f;
+
+    /** Length of the heavy-punch animation; the impact lands at tick 15 of it. */
+    @Unique
+    private static final int PUNCH_ANIMATION_TICKS = 20;
+
+    /**
+     * Height above the player kept clear on every LAUNCH tick. The launch boost climbs 6 blocks per
+     * tick, so 12 covers the next tick's ascent plus margin.
+     */
+    @Unique
+    private static final int TAKEOFF_CLEAR_TICK_HEIGHT = 12;
+
+    /** Minimum ticks between two sonic impacts (see sonicGroundImpact). */
+    @Unique
+    private static final int IMPACT_COOLDOWN_TICKS = 20;
+    @Unique
+    private int lastSonicImpactTick = -1000;
+    /** Cleared on impact and re-armed once the player is clear of the ground/wall again. */
+    @Unique
+    private boolean sonicImpactArmed = true;
+    /** Server tick of the last accepted takeoff, for rate limiting (see getLastTakeoffTick). */
+    @Unique
+    private int lastTakeoffTick = -1000;
+
+    /** Server-side hand offset (relative to the player) where a grabbed entity is held. */
+    @Unique
+    private Vec3 serverHandPos = null;
+    /** Client-only hand positions, filled in by the render mixins. */
+    @Unique
+    private Vec3 calculatedHandPos = null;
+    @Unique
+    private Vec3 calculatedHandOffset = null;
+    @Unique
+    private Vec3 firstPersonLocalHandPos = null;
 
     // Speeds
     @Unique
@@ -74,6 +131,12 @@ public abstract class PlayerEntityMixin extends LivingEntity implements Superson
         builder.define(FLIGHT_TICKS, 0);
         builder.define(TAKEOFF_TICKS, 0);
         builder.define(FLIGHT_ENABLED, false);
+        builder.define(TRYING_TO_GRAB, false);
+        builder.define(GRABBED_TARGET_ID, -1);
+        builder.define(PUNCH_TICKS, 0);
+        builder.define(IS_LEFT_ARM_PUNCH, false);
+        builder.define(PUNCH_STRENGTH, 0.0f);
+        builder.define(PUNCH_COOLDOWN, 0);
     }
 
     // --- SupersonicFlightPlayer interface ---
@@ -171,12 +234,162 @@ public abstract class PlayerEntityMixin extends LivingEntity implements Superson
         }
     }
 
+    @Override
+    public int getLastTakeoffTick() {
+        return lastTakeoffTick;
+    }
+
+    @Override
+    public void setLastTakeoffTick(int tick) {
+        this.lastTakeoffTick = tick;
+    }
+
+    // --- Grab & heavy punch interface implementation ---
+
+    @Override
+    public boolean isTryingToGrab() {
+        return getEntityData().get(TRYING_TO_GRAB);
+    }
+
+    @Override
+    public void setTryingToGrab(boolean trying) {
+        getEntityData().set(TRYING_TO_GRAB, trying);
+    }
+
+    @Override
+    public LivingEntity getGrabbedTarget() {
+        int id = getEntityData().get(GRABBED_TARGET_ID);
+        if (id == -1) return null;
+        // level() resolves the id on whichever side is asking; -1 is the "nothing grabbed" sentinel.
+        return level().getEntity(id) instanceof LivingEntity living ? living : null;
+    }
+
+    @Override
+    public void setGrabbedTarget(LivingEntity target) {
+        getEntityData().set(GRABBED_TARGET_ID, target == null ? -1 : target.getId());
+    }
+
+    @Override
+    public int getPunchTicks() {
+        return getEntityData().get(PUNCH_TICKS);
+    }
+
+    @Override
+    public void setPunchTicks(int ticks) {
+        getEntityData().set(PUNCH_TICKS, ticks);
+    }
+
+    @Override
+    public boolean startPunch() {
+        if (level().isClientSide()) return false;
+        // Rejected punches must change nothing at all — see the interface doc.
+        if (getPunchCooldown() > 0 || getPunchTicks() > 0) return false;
+
+        setLeftArmPunch(!isLeftArmPunch());
+        // Punching at flight speed hits far harder, mirroring ViltrumiteCore's throttle-scaled punch.
+        setPunchStrength(getFlightState() != FlightState.NONE ? getFlightThrottle() : 0.0f);
+        setPunchCooldown(SupersonicConfig.INSTANCE.punchCooldownTicks);
+        setPunchTicks(PUNCH_ANIMATION_TICKS);
+        return true;
+    }
+
+    @Override
+    public boolean isLeftArmPunch() {
+        return getEntityData().get(IS_LEFT_ARM_PUNCH);
+    }
+
+    @Override
+    public void setLeftArmPunch(boolean leftArm) {
+        getEntityData().set(IS_LEFT_ARM_PUNCH, leftArm);
+    }
+
+    @Override
+    public float getPunchStrength() {
+        return getEntityData().get(PUNCH_STRENGTH);
+    }
+
+    @Override
+    public void setPunchStrength(float strength) {
+        getEntityData().set(PUNCH_STRENGTH, strength);
+    }
+
+    @Override
+    public int getPunchCooldown() {
+        return getEntityData().get(PUNCH_COOLDOWN);
+    }
+
+    @Override
+    public void setPunchCooldown(int ticks) {
+        getEntityData().set(PUNCH_COOLDOWN, ticks);
+    }
+
+    @Override
+    public Vec3 getServerHandPos() {
+        return serverHandPos;
+    }
+
+    @Override
+    public void setServerHandPos(Vec3 pos) {
+        this.serverHandPos = pos;
+    }
+
+    @Override
+    public Vec3 getCalculatedHandPos() {
+        return calculatedHandPos;
+    }
+
+    @Override
+    public void setCalculatedHandPos(Vec3 pos) {
+        this.calculatedHandPos = pos;
+    }
+
+    @Override
+    public Vec3 getCalculatedHandOffset() {
+        return calculatedHandOffset;
+    }
+
+    @Override
+    public void setCalculatedHandOffset(Vec3 offset) {
+        this.calculatedHandOffset = offset;
+    }
+
+    @Override
+    public Vec3 getFirstPersonLocalHandPos() {
+        return firstPersonLocalHandPos;
+    }
+
+    @Override
+    public void setFirstPersonLocalHandPos(Vec3 pos) {
+        this.firstPersonLocalHandPos = pos;
+    }
+
+    /** Left-clicking the entity you are holding throws the heavy punch instead of a melee swing. */
+    @Inject(method = "attack", at = @At("HEAD"), cancellable = true)
+    private void onAttackGrabbedTarget(net.minecraft.world.entity.Entity target, CallbackInfo ci) {
+        // Only meaningful while the superhero power set is active.
+        if (!isFlightEnabled()) return;
+
+        LivingEntity grabbed = getGrabbedTarget();
+        if (grabbed != null && grabbed == target) {
+            // Cancelled on both sides so the client does not also play a melee swing, but only
+            // the server changes the punch state — the synced value drives the client's animation.
+            if (!level().isClientSide()) {
+                startPunch();
+            }
+            ci.cancel();
+        }
+    }
+
     // --- Tick logic ---
 
     @Inject(method = "tick", at = @At("TAIL"))
     private void onTick(CallbackInfo ci) {
         Player self = (Player) (Object) this;
         FlightState currentState = getFlightState();
+
+        // Grab / punch run every tick regardless of flight state, so this deliberately sits
+        // above the `currentState == NONE` early-return below.
+        GrabPunchManager.tick(this, self);
 
         // Handle takeoff ticks (vertical boost during LAUNCH)
         if (getTakeoffTicks() > 0) {
@@ -262,19 +475,30 @@ public abstract class PlayerEntityMixin extends LivingEntity implements Superson
             setFlightTicks(Math.min(400, getFlightTicks() + 1));
         }
 
-        // Collision handling (server-side)
+        // Collision handling (server-side).
+        //
+        // Collisions never change the flight state. Hitting terrain means "you cannot move that
+        // way", not "you are no longer flying" — and letting the environment end SONIC made the
+        // state flip HOVER↔SONIC while scraping terrain, which pumped the FOV, re-fired the
+        // sonic-entry effect and cost the player their speed every time. The collision itself
+        // already stops the movement, so nothing needs to be suppressed. Only double-tap space
+        // leaves a flight state.
         if (!level().isClientSide() && currentState != FlightState.LAUNCH) {
-            if (onGround() && getTakeoffTicks() == 0) {
-                if (currentState == FlightState.SONIC) {
-                    sonicGroundImpact(self);
-                }
-                stopFlight();
-            } else if (horizontalCollision) {
-                if (currentState == FlightState.SONIC) {
-                    // Wall impact: same destruction as ground
-                    sonicGroundImpact(self);
-                }
-                switchToHover();
+            boolean touchingGround = onGround() && getTakeoffTicks() == 0;
+            // Ramming terrain from below sets verticalCollision but NOT onGround (vanilla only sets
+            // onGround when moving down) and NOT horizontalCollision — so flying straight up into a
+            // ceiling used to be completely unhandled and produced no impact at all.
+            // verticalCollisionBelow is true only when the collision happened while descending, so
+            // testing it false isolates "hit something above" without depending on onGround.
+            boolean rammedCeiling = verticalCollision && !verticalCollisionBelow;
+            boolean inContact = touchingGround || rammedCeiling || horizontalCollision;
+
+            // Re-arm the impact once the player is clear again; the cooldown alone would still let
+            // a player resting on the ground detonate a fresh crater every second.
+            if (!inContact) {
+                sonicImpactArmed = true;
+            } else if (currentState == FlightState.SONIC) {
+                sonicGroundImpact(self, rammedCeiling);
             }
         }
     }
@@ -292,21 +516,20 @@ public abstract class PlayerEntityMixin extends LivingEntity implements Superson
         setNoGravity(false);
     }
 
+    /**
+     * @param ceiling true when the player rammed terrain from below, so the crater is carved upward
+     *                instead of down into the ground
+     */
     @Unique
-    public void switchToHover() {
-        setFlightState(FlightState.HOVER);
-        setFlightThrottle(0.0f);
-        setFlightAccelerating(false);
-        setTakeoffTicks(0);
-    }
+    private void sonicGroundImpact(Player self, boolean ceiling) {
+        // Since collisions no longer end flight, a player resting against the ground satisfies
+        // `onGround()` every tick. Fire once per contact episode (the armed flag, re-armed in the
+        // collision block) with a small cooldown so sliding along a wall cannot machine-gun it.
+        if (!sonicImpactArmed) return;
+        if (this.tickCount - lastSonicImpactTick < IMPACT_COOLDOWN_TICKS) return;
+        sonicImpactArmed = false;
+        this.lastSonicImpactTick = this.tickCount;
 
-    @Override
-    public void handleFlightCollision() {
-        switchToHover();
-    }
-
-    @Unique
-    private void sonicGroundImpact(Player self) {
         // Immune to fall damage
         self.fallDistance = 0;
         self.resetFallDistance();
@@ -314,15 +537,19 @@ public abstract class PlayerEntityMixin extends LivingEntity implements Superson
         // Terrain destruction on impact
         if (SupersonicConfig.INSTANCE.breakBlocksOnImpact && self instanceof ServerPlayer sp) {
             if (self.level() instanceof ServerLevel sl) {
-                FlightLaunchPayload.destroyTerrain(sp, sl, SupersonicConfig.INSTANCE.destructionRadius);
+                if (ceiling) {
+                    FlightLaunchPayload.destroyTerrainAbove(sp, sl, SupersonicConfig.INSTANCE.destructionRadius);
+                } else {
+                    FlightLaunchPayload.destroyTerrain(sp, sl, SupersonicConfig.INSTANCE.destructionRadius);
+                }
             }
         }
 
-        // True damage to nearby entities (50x attack damage). GENERIC_KILL is in the vanilla
-        // minecraft:bypasses_armor / bypasses_resistance tags, so it ignores armor and resistance
-        // (matching the modpack's "真实伤害" convention in hunter_extralevel.js).
+        // True damage to nearby entities. GENERIC_KILL is in the vanilla minecraft:bypasses_armor /
+        // bypasses_resistance tags, so it ignores armor and resistance (matching the modpack's
+        // "真实伤害" convention in hunter_extralevel.js). Scaled by config, not a flat 50x.
         float attackDamage = (float) self.getAttributeValue(net.minecraft.world.entity.ai.attributes.Attributes.ATTACK_DAMAGE);
-        float damage = attackDamage * 50.0f;
+        float damage = attackDamage * SupersonicConfig.INSTANCE.impactDamageMultiplier;
         for (LivingEntity nearby : self.level().getEntitiesOfClass(LivingEntity.class,
                 self.getBoundingBox().inflate(6.0))) {
             if (nearby != self) {
@@ -363,17 +590,19 @@ public abstract class PlayerEntityMixin extends LivingEntity implements Superson
     private void breakBlocksAbove(Player self, ServerLevel level) {
         int radius = Math.max(0, SupersonicConfig.INSTANCE.takeoffClearRadius);
         BlockPos feet = self.blockPosition();
-        int startY = feet.getY() + 1;
-        int endY = feet.getY() + 12;
 
         for (int dx = -radius; dx <= radius; dx++) {
             for (int dz = -radius; dz <= radius; dz++) {
-                for (int dy = startY; dy <= endY; dy++) {
+                // These are RELATIVE offsets: BlockPos#offset ADDS them to the origin. Passing an
+                // absolute Y (feet.getY() + 1) here double-counted the player's height and cleared
+                // feet+65 .. feet+76 instead of feet+1 .. feet+12 — so the ceiling directly overhead
+                // was never cleared, and a 3x3x12 block of holes appeared high above the player.
+                for (int dy = 1; dy <= TAKEOFF_CLEAR_TICK_HEIGHT; dy++) {
                     BlockPos pos = feet.offset(dx, dy, dz);
                     BlockState state = level.getBlockState(pos);
                     if (state.isAir() || !state.getFluidState().isEmpty()) continue;
                     float hardness = state.getDestroySpeed(level, pos);
-                    if (hardness >= 0.0f && hardness < 50.0f) {
+                    if (hardness >= 0.0f && hardness < SupersonicConfig.INSTANCE.destructionMaxHardness) {
                         level.destroyBlock(pos, false);
                     }
                 }

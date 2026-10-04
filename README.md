@@ -2,7 +2,7 @@
 
 超音速超级英雄飞行模组 | NeoForge 1.21.1
 
-受《无敌少侠》(Invincible) 启发，为 Minecraft 添加三阶段超音速飞行能力——从垂直起飞到超音速冲击波，带来电影级的飞行体验。
+受《无敌少侠》(Invincible) 启发，为 Minecraft 添加三阶段超音速飞行能力，以及配套的**抓取**与**重拳**战斗技能——从垂直起飞到超音速冲击波，再到把敌人拎起来打飞出去。
 
 ## 安装
 
@@ -12,25 +12,29 @@
 
 ## 使用指南
 
-### 开启飞行
+### 开启能力
 
 ```
-/pulsar super          # 为自己开启/关闭飞行能力
+/pulsar super          # 为自己开启/关闭
 /pulsar super <玩家>    # 为指定玩家开启/关闭
 ```
 
 > 需要命令权限等级 2（作弊权限）。开启后聊天栏显示"脉门-开"，关闭显示"脉门-关"。
 
+**飞行、抓取、重拳共用这一个开关**——`/pulsar super` 一次解锁全部能力。关闭时会立刻松开手里抓着的生物。
+
 ### 飞行操作
 
 | 操作 | 效果 |
 |---|---|
-| **双击空格**（未飞行时） | 垂直起飞——LAUNCH 阶段 |
+| **双击空格**（未飞行时） | 垂直起飞——进入 LAUNCH 阶段 |
 | **双击空格**（飞行中） | 取消飞行，回到普通状态 |
 | **按住 W**（HOVER 状态） | 向视线方向飞行（2 方块/tick） |
 | **松开 W** | 逐渐减速 |
 | **按住 Ctrl**（HOVER 状态） | 进入超音速 SONIC 模式 |
 | **松开 Ctrl** | 退出超音速，回到 HOVER |
+
+> **只有双击空格能结束飞行。** 撞击地面、墙壁、天花板都不会让你退出飞行状态——撞到地形只意味着"这个方向过不去"，你仍然保持当前状态，视角转开就飞走了。
 
 ### 飞行三阶段
 
@@ -40,114 +44,165 @@
 
 | 阶段 | 速度 | 说明 |
 |---|---|---|
-| **LAUNCH** | 6 方块/tick（垂直） | 持续 10 tick，脚下爆发火焰粒子，可破坏脚下方块；起飞瞬间自动打通头顶方块（`breakBlocksAboveOnTakeoff`），即使在山洞/地底起飞也不会被天花板卡住 |
+| **LAUNCH** | 6 方块/tick（垂直） | 持续 10 tick，脚下爆发火焰粒子；起飞瞬间自动打通头顶竖井，即使在山洞/地底起飞也不会被天花板卡住 |
 | **HOVER** | 2 方块/tick | WASD 方向飞行，无鞘翅姿势 |
 | **SONIC** | 9 方块/tick（可配置） | 超音速飞行，超人俯冲姿势，FOV 平滑拉伸，速度线与马赫环特效 |
 
-### 碰撞效果
+### 抓取与重拳
 
-在 **SONIC** 模式下撞击地面或墙壁：
-- 破坏周围方块（硬度 < 50，半径可配置）
-- 对周围 6 格内生物造成 50 倍攻击力的**真实伤害**（无视护甲与抗性）
-- 触发屏幕震动和音爆音效
+主手和副手**同时**持有 `l2weaponry:sculkium_claw`（可配置为任意物品）时：
+
+| 操作 | 效果 |
+|---|---|
+| **右键敌对生物** | 抓取——把它掐住举在身前 |
+| **左键点住被抓的生物** | **重拳**——把它打飞出去（唯一的打出方式） |
+| **再次右键** | 松手放开 |
+| **丢开爪子 / 失去 `/pulsar super`** | 自动松手 |
+
+**抓取**：目标被固定在玩家手部、AI 关闭、跟随玩家移动，被拖过方块时会碾碎地形并因此受到碾磨伤害。它会一直被你拎着，直到你打飞它或松手。
+
+**重拳**：20 tick 的完整动作，命中判定在第 15 tick 落下。正前方锥形范围内（外加贴身保底区）的所有生物都会受到伤害并被击飞，被抓住的目标**必定**被击飞。
+
+被打飞的生物会变成"流星"——沿飞行方向**撞穿地形**，每 tick 啃掉一批方块并逐渐减速；当它啃穿超过自身动量允许的量、或撞上无法破坏的方块时**当场爆炸**。
+
+> 重拳的**命中范围**随飞行速度放大（全速时更远），但**破坏地形的范围**由 `punchDestructionRadius` 单独限制，不会跟着无限变大。
+
+### 撞击效果
+
+在 **SONIC** 模式下撞击地面、墙壁或天花板：
+
+- 挖出弹坑（撞地朝下挖、撞天花板朝上挖），硬度 < `destructionMaxHardness` 的方块才可破坏
+- 对周围 6 格内生物造成 `impactDamageMultiplier` 倍攻击力的**真实伤害**（无视护甲与抗性）
+- 触发屏幕震动、音爆音效与冲击环
+
+> 撞击是**每次接触只触发一次**，不是每 tick 重复。贴着地面或墙壁不会持续刷坑刷特效。
 
 ---
 
 ## 配置文件
 
-首次启动后，`config/` 目录下自动生成三份 JSON 配置文件。修改后重启游戏生效。
+首次启动后，`config/` 目录下自动生成三份配置文件，**每一项都带中文注释**。修改后重启游戏生效。
+
+### 关于注释格式
+
+配置文件里的 `//` 行是**有意为之**的注释（JSON 标准本身不支持注释）。模组在读取前会主动剥掉这些行，所以它完全可靠。
+
+副作用是**编辑器（VS Code 等）会把文件标红报错**——这是预期现象，不是文件损坏，**请不要为了消除警告而删掉注释**。
 
 ### `supersonicflight.json` — 服务端配置
 
-```json
-{
-  "maxFlightSpeed": 9.0,
-  "breakBlocksOnTakeoff": true,
-  "breakBlocksOnImpact": true,
-  "destructionRadius": 8,
-  "breakBlocksAboveOnTakeoff": true,
-  "takeoffClearRadius": 1,
-  "takeoffClearHeight": 64
-}
-```
+**飞行**
 
 | 参数 | 默认值 | 说明 |
 |---|---|---|
 | `maxFlightSpeed` | 9.0 | SONIC 模式最大飞行速度（方块/tick） |
-| `breakBlocksOnTakeoff` | true | 起飞时是否破坏脚下方块 |
-| `breakBlocksOnImpact` | true | SONIC 撞击地面/墙壁时是否破坏方块 |
-| `destructionRadius` | 8 | 破坏方块的圆形半径（格） |
-| `breakBlocksAboveOnTakeoff` | true | 垂直起飞时是否自动打通头顶方块（防止被天花板挡住） |
-| `takeoffClearRadius` | 1 | 起飞打通头顶时的水平半径（格） |
-| `takeoffClearHeight` | 64 | 起飞时一次性打通头顶的高度（格） |
 
-### `supersonicflight-client.json` — 客户端配置
-
-```json
-{
-  "enableFovEffect": true,
-  "fovMultiplier": 1.5,
-  "fovMaxHorizontal": 150.0,
-  "fovSmooth": 0.15,
-  "enableWindLoopSound": true,
-  "windVolumeMultiplier": 1.0
-}
-```
+**地形破坏开关**（全部默认开启）
 
 | 参数 | 默认值 | 说明 |
 |---|---|---|
-| `enableFovEffect` | true | 超音速飞行时是否启用 FOV 拉伸效果 |
-| `fovMultiplier` | 1.5 | **垂直** FOV 放大倍数（SONIC 满效果、LAUNCH 半程，有效范围 1.0–2.0） |
-| `fovMaxHorizontal` | 150.0 | 水平 FOV 上限（度），防止超宽屏画面过度拉伸/鱼眼变形 |
-| `fovSmooth` | 0.15 | FOV 拉升与回落的速度平滑系数（0.02–1.0，越大响应越快） |
-| `enableWindLoopSound` | true | 飞行中是否播放循环风声 |
-| `windVolumeMultiplier` | 1.0 | 风声总音量倍率 |
+| `breakBlocksOnTakeoff` | true | 起飞时是否破坏脚下的地形 |
+| `breakBlocksOnImpact` | true | 超音速撞击时是否破坏地形 |
+| `punchBreakBlocks` | true | 重拳是否破坏正前方地形 |
+| `launchBreakBlocks` | true | 被打飞的生物是否撞穿地形（关闭后它会被地形挡下并爆炸） |
+| `grabGrindBlocks` | true | 抓着生物碾过地形时是否碎方块 |
+| `breakBlocksAboveOnTakeoff` | true | 起飞时是否打通头顶竖井 |
 
-> 旧版本把 `fovMultiplier` 当作绝对倍率（如 11.0）。检测到这类旧数值时模组会自动重置为新的 1.5 默认值。
+**地形破坏数值**
+
+| 参数 | 默认值 | 说明 |
+|---|---|---|
+| `destructionRadius` | 5 | 起飞/撞击弹坑半径（格）。半球形，体积按半径立方增长：5 约 260 方块，8 约 1000 |
+| `destructionMaxHardness` | 50.0 | 可破坏方块硬度上限。基岩为 -1（永不破坏），黑曜石为 50（默认打不碎） |
+| `destructionDropChance` | 40.0 | 起飞/撞击破坏方块的掉落概率（%） |
+| `takeoffClearRadius` | 1 | 头顶竖井水平半径（格） |
+| `takeoffClearHeight` | 64 | 头顶竖井高度（格） |
+| `punchDestructionRadius` | 6 | 重拳**破坏地形**的锥形半径（格，约 230 方块）。与命中范围无关 |
+| `punchBlockDropChance` | 40.0 | 重拳破坏方块的掉落概率（%） |
+
+**技能伤害倍率**（均为玩家攻击力的倍数，且都是真实伤害，无视护甲与抗性）
+
+| 参数 | 默认值 | 说明 |
+|---|---|---|
+| `takeoffDamageMultiplier` | 1.0 | 起飞瞬间对周围生物 |
+| `impactDamageMultiplier` | 10.0 | 超音速撞击对周围生物 |
+| `grabGrindDamageMultiplier` | 1.0 | 抓取碾磨。**每 tick 结算一次**，调大会非常快致死 |
+| `launchImpactDamageMultiplier` | 1.0 | 被打飞生物撞进地形那一刻（仅一次） |
+| `launchExplosionDamageMultiplier` | 10.0 | 被打飞生物最终爆炸 |
+| `launchExplosionPower` | 3.0 | 爆炸威力（原版 TNT 为 4.0）。**爆炸坑大小由它决定，与 `destructionRadius` 无关** |
+
+**抓取 / 重拳**
+
+| 参数 | 默认值 | 说明 |
+|---|---|---|
+| `grabEnabled` | true | 技能总开关（仍需 `/pulsar super`） |
+| `grabItem` | `l2weaponry:sculkium_claw` | 触发物品。填错或模组未安装会**自动禁用**，不会报错 |
+| `requireBothHands` | true | 是否必须主副手都持有 |
+| `grabHostileOnly` | true | 是否只能抓敌对生物（玩家永远不可抓） |
+| `grabReach` | 3.0 | 抓取判定距离（格） |
+| `punchBaseDamage` | 10.0 | 重拳基础伤害（飞行越快越高） |
+| `punchLaunchForce` | 4.5 | 打飞基础力度（飞行越快越远） |
+| `punchCooldownTicks` | 40 | 重拳冷却（tick，20 tick = 1 秒） |
+
+**服务端安全**
+
+| 参数 | 默认值 | 说明 |
+|---|---|---|
+| `takeoffCooldownTicks` | 10 | 两次起飞的最短间隔（tick）。起飞由客户端发起且破坏地形，这是防止改过的客户端狂刷的限制。填 0 关闭，默认 0.5 秒不影响正常操作 |
+
+### `supersonicflight-client.json` — 客户端配置
+
+| 参数 | 默认值 | 说明 |
+|---|---|---|
+| `enableFovEffect` | true | 高速飞行时是否启用 FOV 拉伸 |
+| `fovMultiplier` | 1.5 | **垂直** FOV 放大倍数（有效范围 1.0–2.0） |
+| `fovMaxHorizontal` | 150.0 | 水平 FOV 上限（度），防止超宽屏鱼眼变形 |
+| `fovSmooth` | 0.15 | FOV 变化平滑系数（0.02–1.0） |
+| `enableWindLoopSound` | true | 飞行中是否播放循环风声 |
+| `windVolumeMultiplier` | 1.0 | 风声音量倍率 |
+
+> 旧版本把 `fovMultiplier` 当作绝对倍率（如 11.0）。检测到这类旧数值时会自动重置为 1.5。
 
 ### `supersonicflight-camera.json` — 相机配置
-
-```json
-{
-  "cameraRoll": true,
-  "maxCameraRoll": 80.0,
-  "cameraRollMultiplier": 0.11,
-  "cameraRollRoughness": 7.0
-}
-```
 
 | 参数 | 默认值 | 说明 |
 |---|---|---|
 | `cameraRoll` | true | 转弯时是否启用画面倾斜 |
 | `maxCameraRoll` | 80.0 | 最大倾斜角度（度） |
-| `cameraRollMultiplier` | 0.11 | 倾斜灵敏度（越大越敏感） |
-| `cameraRollRoughness` | 7.0 | 倾斜平滑度（越大越灵敏） |
+| `cameraRollMultiplier` | 0.11 | 倾斜灵敏度 |
+| `cameraRollRoughness` | 7.0 | 倾斜回正粗糙度 |
 
 ---
 
 ## 视觉效果
 
-- **速度线**：超音速（SONIC）飞行与起飞瞬间，画面内会出现向后拖曳的白色速度线
-- **马赫环**：起飞、进入超音速、撞击地面时出现白色冲击环
-- **屏幕着色器**：超音速飞行时的屏幕震动、色差分离和进入瞬间的白色闪光
+- **速度线**：超音速飞行与起飞瞬间，画面内向后拖曳的白色速度线
+- **马赫环**：起飞、进入超音速、撞击地面时出现的白色冲击环
+- **重拳冲击波**：像素风格扩散光环，沿出拳方向展开
+- **屏幕着色器**：超音速飞行时的屏幕震动、色差分离与进入瞬间的白色闪光
 - **相机倾斜**：转弯时画面随速度侧倾
-- **粒子特效**：起飞火焰粒子、冲击环白烟粒子
-- **风声**：循环风声，音量和音调随飞行速度变化
+- **粒子特效**：起飞火焰粒子、冲击环白烟粒子、破坏方块碎屑
+- **风声**：循环风声，音量与音调随飞行速度变化
+
+> 进入超音速的特效有 1.5 秒节流——贴地形飞行时状态会短暂切换，特效不会跟着刷屏。
 
 ## 兼容性
 
-- 兼容创造模式（已修复姿态抽搐问题）
+- **客户端 / 服务端双端可用**：专用服务端已实测可正常启动并加载，客户端专属代码全部隔离，服务端不会加载
+- 兼容创造模式
 - 内置反作弊绕过（防止高速飞行被服务器踢出）
 - 几何渲染无自定义纹理，与光影模组（OptiFine / Iris）兼容
+- 左手持物、双手持物均正常判定
 
 ## 构建
 
 ```bash
-./gradlew build          # 编译
+./gradlew build          # 编译，产物在 build/libs/
 ./gradlew runClient      # 运行客户端测试
+./gradlew runServer      # 运行服务端测试
 ```
 
-需要 JDK 21。
+需要 JDK 21。构建产物命名为 `supersonicflight-<版本>-neoforge-<MC版本>.jar`。
 
 ## 许可证
 

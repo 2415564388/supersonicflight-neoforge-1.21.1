@@ -24,4 +24,8 @@ public class ModSounds {
     public static final Supplier<SoundEvent> TAKEOFF =
             SOUNDS.register("takeoff", () -> SoundEvent.createVariableRangeEvent(
                     ResourceLocation.fromNamespaceAndPath(MOD_ID, "takeoff")));
+
+    public static final Supplier<SoundEvent> PUNCH_IMPACT =
+            SOUNDS.register("punch_impact", () -> SoundEvent.createVariableRangeEvent(
+                    ResourceLocation.fromNamespaceAndPath(MOD_ID, "punch_impact")));
 }

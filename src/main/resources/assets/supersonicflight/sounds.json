@@ -20,5 +20,12 @@
     "sounds": [
       "supersonicflight:takeoff2"
     ]
+  },
+  "punch_impact": {
+    "category": "player",
+    "subtitle": "subtitles.supersonicflight.punch_impact",
+    "sounds": [
+      "supersonicflight:punch_impact"
+    ]
   }
 }

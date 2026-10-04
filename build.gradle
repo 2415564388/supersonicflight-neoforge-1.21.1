@@ -17,6 +17,13 @@ base {
     archivesName = mod_id
 }
 
+// Release artifacts are named with the loader and Minecraft version: the mod supports a single
+// MC version per branch, and the plain `name-version.jar` gives downloaders no way to tell which
+// one a file is for.
+tasks.named('jar', Jar) {
+    archiveFileName = "${mod_id}-${mod_version}-neoforge-${minecraft_version}.jar"
+}
+
 java.toolchain.languageVersion = JavaLanguageVersion.of(21)
 
 minecraft.accessTransformers.file rootProject.file('src/main/resources/META-INF/accesstransformer.cfg')

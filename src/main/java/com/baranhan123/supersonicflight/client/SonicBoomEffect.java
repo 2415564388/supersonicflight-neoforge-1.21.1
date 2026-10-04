@@ -28,6 +28,18 @@ public class SonicBoomEffect {
     private static long impactTime = 0;
     private static boolean wasSonic = false;
     private static FlightState prevState = FlightState.NONE;
+    private static long lastSonicEntryFxTime = 0;
+
+    /**
+     * Minimum gap between two "entered SONIC" effects.
+     *
+     * <p>The flight state can legitimately flip HOVER↔SONIC several times a second — the collision
+     * handler drops out of SONIC on contact, and the input handler immediately asks for it again
+     * once the player is clear. Firing a white flash, a ripple, three shockwave rings and a sonic
+     * boom on every one of those flips is unreadable, so the *effect* is rate limited even though
+     * the state change is not.
+     */
+    public static final long SONIC_ENTRY_COOLDOWN_MS = 1500L;
     /** Last known window size so the PostChain can be re-sized when the window changes. */
     private static int lastPostChainWidth = -1;
     private static int lastPostChainHeight = -1;
@@ -56,9 +68,13 @@ public class SonicBoomEffect {
                 currentThrottle = Math.min(1f, currentThrottle + 0.1f);
                 if (!wasSonic) {
                     wasSonic = true;
-                    sonicEntryTime = System.currentTimeMillis();
-                    rippleTime = 1.0f;
-                    sonicFlash = 1.0f;  // Trigger white flash
+                    long now = System.currentTimeMillis();
+                    if (now - lastSonicEntryFxTime >= SONIC_ENTRY_COOLDOWN_MS) {
+                        lastSonicEntryFxTime = now;
+                        sonicEntryTime = now;
+                        rippleTime = 1.0f;
+                        sonicFlash = 1.0f;  // Trigger white flash
+                    }
                 }
             } else if (state == FlightState.HOVER) {
                 currentThrottle = Math.max(0f, currentThrottle - 0.05f);

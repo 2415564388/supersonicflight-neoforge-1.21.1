@@ -46,7 +46,10 @@ public abstract class GameRendererMixin {
     private void onGetFov(Camera camera, float partialTick, boolean useFovSetting,
                           CallbackInfoReturnable<Double> cir) {
         if (!useFovSetting) return;
-        if (!SupersonicConfigClient.INSTANCE.enableFovEffect) return;
+        if (!SupersonicConfigClient.INSTANCE.enableFovEffect) {
+            SupersonicFlightClient.currentFovMultiplier = 1.0f;
+            return;
+        }
 
         Minecraft mc = Minecraft.getInstance();
         if (mc.player == null) return;
@@ -65,6 +68,7 @@ public abstract class GameRendererMixin {
 
         if (smoothedFovBoost < 0.001f) {
             smoothedFovBoost = 0.0f;
+            SupersonicFlightClient.currentFovMultiplier = 1.0f;
             return; // fully settled back to vanilla, no override needed
         }
 
@@ -76,6 +80,12 @@ public abstract class GameRendererMixin {
         if (aspect < 0.05) aspect = 0.05; // guard against degenerate window size
 
         double fov = baseVerticalFov * (1.0 + smoothedFovBoost * (verticalMultiplier - 1.0));
+
+        // Publish the real multiplier for the grab renderer. Set before the horizontal clamp so it
+        // reflects what is actually being rendered this frame.
+        SupersonicFlightClient.currentFovMultiplier = baseVerticalFov > 0.0
+                ? (float) (fov / baseVerticalFov)
+                : 1.0f;
 
         // Safety cap on the resulting horizontal FOV so ultra-wide windows don't fish-eye/invert.
         double maxHorizontal = Math.max(SupersonicConfigClient.INSTANCE.fovMaxHorizontal, 30.0);

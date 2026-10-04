@@ -5,10 +5,19 @@
   "compatibilityLevel": "JAVA_21",
   "refmap": "supersonicflight.refmap.json",
   "client": [
+    "FirstPersonGrabMixin",
+    "FirstPersonPunchMixin",
     "FlightCameraMixin",
     "GameRendererMixin",
+    "GrabModelMixin",
+    "GrabbedEntityPositionMixin",
+    "GrabbedEntityRendererMixin",
+    "GrabbedEntityRendererMixin2",
+    "HandPositionTrackerMixin",
     "ItemInHandRendererMixin",
-    "PostChainAccessor"
+    "PostChainAccessor",
+    "PunchModelMixin",
+    "PunchRendererCoreMixin"
   ],
   "injectors": {
     "defaultRequire": 1

@@ -47,8 +47,10 @@ Key speeds defined as constants in `PlayerEntityMixin`:
 - `LAUNCH_SPEED = 6.0f` (vertical takeoff boost)
 
 **Collision handling** (server-side only in `PlayerEntityMixin.onTick()`):
-- Ground impact or horizontal collision during SONIC triggers `sonicGroundImpact()`: terrain destruction, 50× attack **true damage** (`DamageTypes.GENERIC_KILL`, bypasses armor/resistance) to nearby entities in a 6-block radius, sonic boom + takeoff sounds, explosion/firework particles. LAUNCH takeoff deals the same GENERIC_KILL true damage to entities within a 5-block radius.
-- Horizontal collision during HOVER calls `switchToHover()` to reset state.
+- **Collisions never end flight.** Double-tapping space is the only way out of a flight state. A player who lands keeps their current state and simply sits there until they fly off again.
+- Ground impact or horizontal collision during SONIC triggers `sonicGroundImpact()`: terrain destruction, **true damage** (`DamageTypes.GENERIC_KILL`, bypasses armor/resistance) to nearby entities in a 6-block radius, sonic boom + takeoff sounds, explosion/firework particles. LAUNCH takeoff deals the same true damage to entities within a 5-block radius.
+- `sonicGroundImpact` is **edge-triggered**, not per-tick: it fires once per contact episode. The `sonicImpactArmed` flag is cleared on impact and re-armed only after a tick with no ground or wall contact, with a 20-tick cooldown as a backstop against `horizontalCollision` flickering while sliding along a wall. Without this, a player resting on the ground would re-trigger the destruction every tick.
+- Horizontal collision calls `switchToHover()`, which drops out of SONIC and clears the forward push so a player pressed against a wall is not held there at full throttle. In HOVER this only resets throttle/acceleration.
 - LAUNCH is exempt from collision handling.
 
 ### Core Pattern: Mixin + Interface
@@ -59,22 +61,48 @@ The `SupersonicFlightPlayer` interface is mixed into `Player.class` via `PlayerE
 
 `/pulsar super [target]` (permission level 2) → `isFlightEnabled()=true` → double-tap space → `LAUNCH` → auto-transition to `HOVER` → hold W to fly forward → hold Ctrl for `SONIC`
 
-Double-tapping space while already flying cancels flight entirely (returns to NONE).
+Double-tapping space while already flying cancels flight entirely (returns to NONE). This is the **only** way to leave a flight state — collisions deliberately do not end it.
+
+The grab / heavy-punch skill set is gated on the same `isFlightEnabled()` flag, so `/pulsar super` unlocks flight, grab and punch together.
+
+### Grab & Heavy Punch
+
+A separate combat subsystem, ported from ViltrumiteCore. It shares `PlayerEntityMixin`'s synched data but has its own manager and event handler.
+
+**Trigger**: hold the configured item (default `l2weaponry:sculkium_claw`) in **both hands**, then:
+
+| Input | Effect |
+|---|---|
+| Right-click a hostile mob | Grab it (or, if already holding one, let it go) |
+| **Left-click the held mob** | Heavy punch — the only way to throw one |
+| Drop the grab item / lose `/pulsar super` | Releases the grab |
+
+- **Grab**: the victim is pinned to the player's hand by `GrabPunchManager.tickGrab`, AI disabled (`Mob#setNoAi`), persistence forced, tagged `SupersonicGrabbed`, and dragged through terrain (hardness 0–50) which grinds it for damage. Releasing requires dropping the grab item, the victim dying, or punching. `LivingEntityGrabFailsafeMixin` clears a stale tag/AI if the grabber vanishes.
+- **Punch**: started only via `SupersonicFlightPlayer.startPunch()`, which is atomic — it checks the cooldown and whether a punch is already running *before* flipping `IS_LEFT_ARM_PUNCH`. Splitting those two steps made a rejected punch still toggle the arm, which the client renders as the arm twitching. Vanilla can deliver both `EntityInteractSpecific` and `EntityInteract` for a single click, so the atomicity is load-bearing, not defensive. `GrabModelMixin` and `FirstPersonGrabMixin` also bail out while `punchTicks > 0`, because the punch keyframes both arms and would otherwise fight the grab pose during the wind-up (the victim is held until the impact tick).
+- **Punch**: a 20-tick animation whose impact lands on tick 15 (`GrabPunchManager.executePunch`). Everything in a forward cone (plus a close-range guaranteed zone) takes damage scaled by flight throttle and is launched; the held victim is always launched. Launched entities become tracked "meteors" — `tickLaunchedEntities` ploughs them through blocks and detonates them once they exceed a momentum-derived block budget or meet an unbreakable block. Each meteor carries its thrower, so its collision and explosion damage scale to that player's attack damage.
+
+**Terrain destruction is centralised.** `util/TerrainDestruction` owns the one hardness gate, drop roll and block-break particle burst. `FlightLaunchPayload.destroyTerrain` (takeoff + sonic impact) digs a `shatterCrater` bowl clipped at the player's feet, and `GrabPunchManager.shatterTerrain` tests its cone then calls the same `shatterBlock`. Earlier the flight path only popped the topmost block of each column and flung it as a falling-block entity, which read as a different mod from the punch's volume dig.
+
+**Two-hand detection caveat**: `PlayerInteractEvent.EntityInteractSpecific` alone does *not* suppress the held item's own `interactLivingEntity` — vanilla falls through to `EntityInteract` on the client unless the cancellation result is `SUCCESS`. `GrabPunchHandler` therefore cancels *both* events. Read `getMainHandItem()`/`getOffhandItem()` rather than `event.getHand()`, since a two-handed hold fires the event once per hand.
+
+**Hand-position sync**: the client sends a **player-relative offset** (`HandPosSyncPayload`), not a world position — at SONIC speed an absolute position arrives stale and the victim visibly trails the hand.
 
 ### Package Structure
 
 | Package | Purpose |
 |---|---|
 | `com.baranhan123.supersonicflight` | Root: `SupersonicFlight.java` — main mod class (`MOD_ID`, static `LOGGER`), registers sounds and command |
-| `.util` | `FlightState` enum and `SupersonicFlightPlayer` interface |
-| `.mixin` | Server/common mixins: `PlayerEntityMixin` (core flight logic + physics), `FlightAntiCheatBypassMixin` (prevents anti-cheat kicks at high speed), `FallingBlockEntityInvoker` (accessor for block-throwing on terrain destruction) |
-| `.network` | `ModMessages` registers the 4 play-to-server payloads at protocol version "1.1" |
-| `.network.packet` | `FlightLaunchPayload` (takeoff), `FlightTogglePayload` (cancel), `FlightSonicPayload` (Ctrl toggle), `FlightForwardPayload` (W key toggle). Three additional payloads exist as files but are **not registered**: `FlightAcceleratePayload`, `FlightSpeedLockPayload`, `HoverInputPayload`. |
+| `.util` | `FlightState` enum, `SupersonicFlightPlayer` interface, `GrabPunchManager` (server-side grab/punch physics + meteor tracking), `TerrainDestruction` (the single destruction rule shared by takeoff, impacts and the punch) |
+| `.event` | `GrabPunchHandler` — `@EventBusSubscriber(bus = GAME)`; right-click grab/release. Only `EntityInteractSpecific` acts, because acting on both interact events would make the toggle release-then-regrab on a single click |
+| `.mixin` | Server/common mixins: `PlayerEntityMixin` (core flight logic + physics + all Player synched data), `FlightAntiCheatBypassMixin` (prevents anti-cheat kicks at high speed), `FallingBlockEntityInvoker` (accessor for block-throwing on terrain destruction), `GrabbedEntityPhysicsMixin` (cancels `Entity#push` on a held entity), `LivingEntityGrabFailsafeMixin` (restores a held entity's AI if the grabber vanishes) |
+| `.network` | `ModMessages` registers the 5 play-to-server payloads at protocol version "1.1" |
+| `.network.packet` | `FlightLaunchPayload` (takeoff), `FlightTogglePayload` (cancel), `FlightSonicPayload` (Ctrl toggle), `FlightForwardPayload` (W key toggle), `HandPosSyncPayload` (grab hand offset). Three additional payloads exist as files but are **not registered**: `FlightAcceleratePayload`, `FlightSpeedLockPayload`, `HoverInputPayload`. |
 | `.config` | `SupersonicConfig` (server-side), `SupersonicConfigClient` (client: FOV, sounds), `SupersonicFlightCameraConfig` (client: camera roll) — all JSON stored in the config directory |
 | `.command` | `SupersonicFlightCommand` — `/pulsar super [target]` toggles `isFlightEnabled()` on a player (permission level 2) |
-| `.registry` | `ModSounds` — `DeferredRegister` for `sonic_boom`, `wind_loop`, `takeoff` sound events |
+| `.registry` | `ModSounds` — `DeferredRegister` for `sonic_boom`, `wind_loop`, `takeoff`, `punch_impact` sound events |
 | `.client` | `SupersonicFlightClient` (client init, loads client configs, registers `FlightInputHandler`), `FlightInputHandler` (client tick → detects double-tap, W, Ctrl → dispatches packets), `ModKeybinds` (R key — currently unused in the actual architecture), `MachDiskManager` (renders expanding shockwave rings in-world, geometry via shared `ShockwaveRenderTypes`), `SpeedLineManager` (anime-style additive speed-line trails during SONIC/instant takeoff, ported from ViltrumiteCore `DashVFXManager`), `ShockwaveRenderTypes` (shared RenderTypes for shockwave rings & speed lines), `SonicBoomEffect` (post-processing shader with screen shake), `PoseDataManager` (data model for pose transforms) |
-| `.client.mixin` | 4 client-side mixins for high-speed FOV, camera roll, first-person hand position, and shader access |
+| `.client.mixin` | 13 client-side mixins: high-speed FOV, camera roll, first-person hand position, shader access, plus the grab/punch set (`FirstPersonGrabMixin` 1200, `FirstPersonPunchMixin` 1500, `GrabModelMixin` 2000, `PunchModelMixin` 1150, `PunchRendererCoreMixin`, `GrabbedEntityPositionMixin`, `GrabbedEntityRendererMixin`, `GrabbedEntityRendererMixin2`, `HandPositionTrackerMixin`) |
+| `.client.vfx` | `PunchVFXManager` — the punch's additive "paint-pixel" shockwave ring |
 | `.client.render` | `FlightAnimManager` (per-player smooth animation state: supermanFactor, descendFactor), `AtmosphericHeatFeatureRenderer` (orange heat glow layer during SONIC) |
 | `.client.sound` | `FlightWindSoundInstance` (looping wind sound, volume/pitch tied to throttle) |
 | `.client.gui` | `FirstPersonScreen` (in-game client config UI with sliders/checkboxes), `ThirdPersonScreen` (36-slider body-part pose editor, placeholder values), `PoseSlider` (reusable slider widget) |
@@ -85,40 +113,87 @@ All 4 active network payloads are **client→server only** (`playToServer`). The
 
 | Packet | Trigger | Server Action |
 |---|---|---|
-| `FlightLaunchPayload` | Double-tap space when not flying | Sets LAUNCH state, 10 takeoff ticks, spawns particles+sounds, optional terrain destruction, clears the column above when `breakBlocksAboveOnTakeoff`, 50× attack true damage (`GENERIC_KILL`) to nearby entities |
+| `FlightLaunchPayload` | Double-tap space when not flying | Sets LAUNCH state, 10 takeoff ticks, spawns particles+sounds, optional terrain destruction, clears the column above when `breakBlocksAboveOnTakeoff`, true damage (`GENERIC_KILL`) to nearby entities |
 | `FlightTogglePayload` | Double-tap space when flying | Calls `stopFlight()`, clears all flight state |
 | `FlightSonicPayload` (bool) | Ctrl pressed/released | Switches between SONIC and HOVER |
 | `FlightForwardPayload` (bool) | W pressed/released in HOVER | Sets `isFlightAccelerating()` to control forward movement |
+| `HandPosSyncPayload` (3 doubles) | Client renders the grabbing arm | Stores a **player-relative** hand offset; server pins the held entity to `player.position() + offset`. Ignored unless a target is grabbed, and rejected if further than 4 blocks from the player |
 
 ### Mixin Organization
 
-**`supersonicflight.mixins.json`** (server/common, 3 mixins):
-- `PlayerEntityMixin` — the core: implements `SupersonicFlightPlayer`, defines 9 synced data entries, runs per-tick flight physics, handles collisions, persists state to NBT
+**`supersonicflight.mixins.json`** (server/common, 5 mixins):
+- `PlayerEntityMixin` — the core: implements `SupersonicFlightPlayer`, defines **all 15** synced data entries (flight + grab/punch), runs per-tick flight physics and `GrabPunchManager.tick`, handles collisions, persists state to NBT. All `Player` accessors live here on purpose: `SynchedEntityData.defineId` assigns ids in class-init order, so splitting them across two mixins risks a client/server id desync.
 - `FlightAntiCheatBypassMixin` — resets `receivedMovePacketCount` and position trackers for LAUNCH/SONIC to prevent "moved too quickly" kicks
 - `FallingBlockEntityInvoker` — `@Invoker` accessor for `FallingBlockEntity` constructor (used in terrain destruction)
+- `GrabbedEntityPhysicsMixin` — cancels `Entity#push` (both overloads) for held entities so the world cannot shove them out of the player's hand
+- `LivingEntityGrabFailsafeMixin` — clears the `SupersonicGrabbed` tag and restores AI if the grabber disconnects, dies, or unloads
 
-**`supersonicflight.client.mixins.json`** (client-only, 4 mixins):
-- `GameRendererMixin` — high-speed FOV widening in `getFov` (vertical-FOV multiplier with smoothing ramp + horizontal-FOV cap so window resize / ultra-wide doesn't jump or fish-eye; only touches `useFovSetting == true`, keeps held-item FOV vanilla), plus the hook point for camera roll application in `renderLevel`
+**`supersonicflight.client.mixins.json`** (client-only, 13 mixins):
+
+*Flight:*
+- `GameRendererMixin` — high-speed FOV widening in `getFov` (vertical-FOV multiplier with smoothing ramp + horizontal-FOV cap so window resize / ultra-wide doesn't jump or fish-eye; only touches `useFovSetting == true`, keeps held-item FOV vanilla), plus the hook point for camera roll application in `renderLevel`. Also publishes `SupersonicFlightClient.currentFovMultiplier` for the grab renderer.
 - `FlightCameraMixin` — calculates camera roll (Z-rotation) based on turn speed with exponential smoothing
-- `ItemInHandRendererMixin` — translates first-person hand position down/back during flight
+- `ItemInHandRendererMixin` — translates first-person hand position down/back during flight; stands down while grabbing or punching so it does not offset their keyframes
 - `PostChainAccessor` — `@Accessor` exposing `PostChain.passes` for shader uniform manipulation
+
+*Grab / punch (priorities matter — grab and punch both write the same model parts and both hook `renderArmWithItem`):*
+- `FirstPersonGrabMixin` (1200) — first-person "force choke" arm; also computes and sends the hand offset
+- `FirstPersonPunchMixin` (1500) — first-person punch keyframes
+- `GrabModelMixin` (2000) — third-person grab arm, built by copying the head rotation
+- `PunchModelMixin` (1150) — third-person full-body punch keyframes (`@Shadow`s `PlayerModel.cloak`)
+- `PunchRendererCoreMixin` — whole-body lunge, only while flying
+- `GrabbedEntityPositionMixin` — re-anchors a held entity to the hand in `EntityRenderDispatcher.render`
+- `GrabbedEntityRendererMixin` — held-entity facing/pose; uses `@WrapOperation` (not the reference's `@Redirect`) on `EntityModel.setupAnim` so it composes with other mods
+- `GrabbedEntityRendererMixin2` — culling + nametag placement for held entities
+- `HandPositionTrackerMixin` — third-person hand offset source; local player only, so another player's grab cannot overwrite your hand position
 
 > `AbstractClientPlayerMixin` was **removed** — its `getFieldOfViewModifier` FOV override is obsolete; the FOV logic now lives in `GameRendererMixin`.
 
-Several additional mixin source files exist but are **not registered** in the client mixin config: `PlayerModelMixin`, `SlowFlyingModelMixin`, `SlowFlyingRendererMixin`, `PlayerFeatureRendererMixin`, `CapeHeatFeatureMixin`, `PlayerRendererMixin`, `LivingEntityRendererAccessor`, `PlayerModelAccessor`.
+Two porting hazards worth remembering: `setupAnim` on `PlayerModel` exists twice (the real `LivingEntity`-erased override plus an `Entity`-erased bridge) — target the `LivingEntity` one; and `Model.renderToBuffer` in 1.21.1 takes 5 args with a packed-colour `int` last, not the older `IIFFFF` form.
 
 ### Config Files
 
-Three JSON configs auto-generated in `FMLPaths.CONFIGDIR` on first run:
+Three JSON configs auto-generated in `FMLPaths.CONFIGDIR` on first run. They are **commented JSON**: `config/CommentedJson` writes a `//` note above every option (taken from the field's `@ConfigComment`) and strips those lines again on read.
+
+**These files are deliberately not valid JSON** — an editor will flag them, and that is expected. The notes are Chinese because the files are read by the pack author and players, and JSON has no comment syntax. Do not "fix" the warnings by deleting the comments.
+
+Verified against Gson 2.10.1: its lenient reader tolerates both `//` and `#` natively, but nothing relies on that — the stripper is explicit, so changing the parser or its leniency cannot silently corrupt a config. The stripper tracks string literals, so an option value containing `//` survives; Gson never sees a comment.
+
+Never write these files by hand without the annotation, and never add a field without one.
 
 **`supersonicflight.json`** (server-side):
 - `maxFlightSpeed` (default 9.0) — caps SONIC speed
+- `takeoffCooldownTicks` (10) — **server-side rate limit on LAUNCH.** The takeoff packet is client-triggered and destroys terrain, so without this a modified client could alternate launch/cancel far faster than a human can double-tap and repeatedly crater the world on the server thread. 0 disables it; 10 ticks (0.5 s) does not affect normal play, since a cancel-and-relaunch sequence takes far longer than that.
 - `breakBlocksOnTakeoff` (default true) — destroy terrain on LAUNCH
 - `breakBlocksOnImpact` (default true) — destroy terrain on SONIC ground/wall impact
-- `destructionRadius` (default 8) — radius in blocks for terrain destruction
+- `destructionRadius` (default 5) — radius in blocks for takeoff/impact craters. Crater volume grows with the cube of the radius: 5 is ~260 blocks, 8 is ~1000. `TerrainDestruction.MAX_BLOCKS_PER_CRATER` (4096) caps a single crater so a mis-set value cannot lock the server.
 - `breakBlocksAboveOnTakeoff` (default true) — clear a vertical tube above the player during LAUNCH so an underground takeoff doesn't get stuck on a ceiling
 - `takeoffClearRadius` (default 1) — horizontal radius (blocks) of the cleared tube above the player
 - `takeoffClearHeight` (default 64) — height (blocks) of the shaft cleared at the moment of takeoff
+- `grabEnabled` (true) — master switch for the grab / heavy-punch skill
+- `grabItem` (default `"l2weaponry:sculkium_claw"`) — item that arms the skill; an unresolvable id simply disables it
+- `requireBothHands` (true) — require the item in both hands
+- `grabHostileOnly` (true) — only `Enemy` mobs; players are never valid targets
+- `grabReach` (3.0) — grab search distance in front of the player
+- `grabGrindBlocks` (true) — held entity smashes and is damaged by blocks it is dragged through
+- `punchBaseDamage` (10.0), `punchLaunchForce` (4.5) — punch power; both scale with flight throttle
+- `punchBreakBlocks` (true), `punchBlockDropChance` (40.0) — punch terrain destruction
+- `punchDestructionRadius` (6) — **caps the punch's terrain cone independently of its hit volume.** The hit cone scales with flight throttle (`rOut = 9 * (1 + throttle * 1.5)`), which at full throttle is 22 blocks long — about 12,000 blocks, 45x the `destructionRadius` preset. The terrain cone is clamped to this radius and scaled proportionally so the shape is unchanged, just shorter.
+- `launchExplosionPower` (3.0) — power of a punched entity's final explosion. Was derived from the meteor's speed (up to 10, i.e. 2.5x TNT), which is what made the end crater dwarf everything else. Ignored entirely when `launchBreakBlocks` is off.
+- `punchCooldownTicks` (40) — punch cooldown
+
+**Shared terrain destruction:**
+- `destructionMaxHardness` (50.0) — blocks with a destroy speed at or above this survive (bedrock is -1, obsidian is 50). Shared by takeoff, impacts and the punch via `util/TerrainDestruction`.
+- `destructionDropChance` (40.0) — drop roll for blocks destroyed by takeoff and sonic impacts (the punch has its own `punchBlockDropChance`)
+
+**Ability damage.** Every value below is a multiple of the player's `ATTACK_DAMAGE`, dealt as true damage via `DamageTypes.GENERIC_KILL`. See `GrabPunchManager.attackDamage`/`trueDamage`.
+- `takeoffDamageMultiplier` (1.0) — to nearby entities at takeoff
+- `impactDamageMultiplier` (10.0) — to nearby entities on a sonic ground/wall impact
+- `grabGrindDamageMultiplier` (1.0) — per grinding tick to a held entity, applied once per tick (not per block)
+- `launchImpactDamageMultiplier` (1.0) — to a punched entity when it first bites into terrain
+- `launchExplosionDamageMultiplier` (10.0) — to a punched entity by the final explosion
+
+**Terrain-destruction toggles.** Every ability that can destroy terrain has its own switch, all defaulting to on: `breakBlocksOnTakeoff`, `breakBlocksOnImpact`, `punchBreakBlocks`, `launchBreakBlocks` (whether a punched entity ploughs through terrain on its way), `grabGrindBlocks`, `breakBlocksAboveOnTakeoff`. With `launchBreakBlocks` off the entity still stops against terrain and detonates — it just does not eat through it.
 
 **`supersonicflight-client.json`** (client-side):
 - `enableFovEffect` (true) — high-speed FOV effect on/off
@@ -143,6 +218,10 @@ Three JSON configs auto-generated in `FMLPaths.CONFIGDIR` on first run:
 5. **FlightWindSoundInstance** — client-side looping sound. Volume = throttle × `windVolumeMultiplier`. Pitch = 0.5 + throttleLerped × 1.5.
 
 6. **FlightAnimManager** — per-player `HashMap<UUID, AnimState>` tracking `supermanFactor` (0→1 smoothed based on throttle), `descendFactor` (vertical speed based), `takeoffAnim`, `sonicBoomAnim`, `throttleSmooth`.
+
+7. **PunchVFXManager** — the heavy punch's shockwave, drawn on `RenderLevelStageEvent` (AFTER_LEVEL) through `ShockwaveRenderTypes.additiveQuad()`. Not a smooth band: it is a grid of "paint pixels" of decreasing world size (4→32 cells, radius 0.5→6.5) in the plane perpendicular to the punch, tinted 240/250/255, live only for the `[0.25, 0.65]` slice of the 20-tick punch. Reimplemented on the existing `MachDiskManager` render path rather than the reference's raw `Tesselator`/`BufferBuilder`, which targets an older GL state API.
+
+`GrabAnimationManager` (client) does the same smoothing job as `FlightAnimManager` but for the grab pose, keyed weakly by entity so it eases in/out instead of snapping.
 
 ### Key Minecraft Version Details
 

@@ -2,10 +2,10 @@ package com.baranhan123.supersonicflight.network.packet;
 
 import com.baranhan123.supersonicflight.SupersonicFlight;
 import com.baranhan123.supersonicflight.config.SupersonicConfig;
-import com.baranhan123.supersonicflight.mixin.FallingBlockEntityInvoker;
 import com.baranhan123.supersonicflight.registry.ModSounds;
 import com.baranhan123.supersonicflight.util.FlightState;
 import com.baranhan123.supersonicflight.util.SupersonicFlightPlayer;
+import com.baranhan123.supersonicflight.util.TerrainDestruction;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.particles.ParticleTypes;
 import net.minecraft.network.RegistryFriendlyByteBuf;
@@ -16,10 +16,9 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.sounds.SoundEvents;
 import net.minecraft.sounds.SoundSource;
-import net.minecraft.util.RandomSource;
 import net.minecraft.world.damagesource.DamageTypes;
-import net.minecraft.world.entity.item.FallingBlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.phys.Vec3;
 import net.neoforged.neoforge.network.handling.IPayloadContext;
 
 public record FlightLaunchPayload() implements CustomPacketPayload {
@@ -42,6 +41,15 @@ public record FlightLaunchPayload() implements CustomPacketPayload {
             SupersonicFlightPlayer flightPlayer = (SupersonicFlightPlayer) player;
             if (flightPlayer.getFlightState() != FlightState.NONE) return;
             if (!flightPlayer.isFlightEnabled()) return;
+
+            // Server-side rate limit. Takeoff is client-triggered and destroys terrain, so without
+            // this a modified client could alternate launch/cancel far faster than a human can
+            // double-tap and repeatedly crater the world on the server thread.
+            int cooldown = SupersonicConfig.INSTANCE.takeoffCooldownTicks;
+            if (cooldown > 0 && player.tickCount - flightPlayer.getLastTakeoffTick() < cooldown) {
+                return;
+            }
+            flightPlayer.setLastTakeoffTick(player.tickCount);
 
             // Enter LAUNCH state - vertical takeoff
             flightPlayer.setFlightState(FlightState.LAUNCH);
@@ -87,10 +95,10 @@ public record FlightLaunchPayload() implements CustomPacketPayload {
                 clearColumnAbove(player, serverLevel);
             }
 
-            // Damage nearby entities on takeoff (50x player attack damage). Same GENERIC_KILL true
-            // damage as the sonic impact so both bursts behave consistently (bypass armor/resistance).
+            // Damage nearby entities on takeoff. GENERIC_KILL is true damage (bypasses armor and
+            // resistance), scaled by the configurable multiplier rather than a flat 50x.
             float attackDamage = (float) player.getAttributeValue(net.minecraft.world.entity.ai.attributes.Attributes.ATTACK_DAMAGE);
-            float damage = attackDamage * 50.0f;
+            float damage = attackDamage * SupersonicConfig.INSTANCE.takeoffDamageMultiplier;
             for (net.minecraft.world.entity.LivingEntity nearby : serverLevel.getEntitiesOfClass(
                     net.minecraft.world.entity.LivingEntity.class,
                     player.getBoundingBox().inflate(5.0))) {
@@ -101,54 +109,37 @@ public record FlightLaunchPayload() implements CustomPacketPayload {
         });
     }
 
+    /**
+     * Blasts a crater under the player, using the mod's shared destruction rule (the same one the
+     * heavy punch uses): shaped volume, block-break particles, and a configurable drop roll.
+     *
+     * <p>Clipped at roughly the player's feet so it hollows out the ground rather than also clearing
+     * the air above — a full sphere at radius 8 would be a floating ball of nothing.
+     */
+    /** Crater for a downward impact (takeoff, landing): a bowl hollowed out below the player. */
     public static void destroyTerrain(ServerPlayer player, ServerLevel level, int radius) {
-        BlockPos playerPos = player.blockPosition();
-        RandomSource random = level.random;
+        Vec3 feet = player.position();
+        TerrainDestruction.shatterCrater(
+                level,
+                feet,
+                radius,
+                feet.y - radius,   // down to the full sphere extent
+                feet.y + 1.0,      // but not the air above the player
+                TerrainDestruction.dropChanceFraction(SupersonicConfig.INSTANCE.destructionDropChance),
+                player);
+    }
 
-        for (int dx = -radius; dx <= radius; dx++) {
-            for (int dz = -radius; dz <= radius; dz++) {
-                if (dx * dx + dz * dz > radius * radius) continue;
-
-                BlockPos targetPos = null;
-                BlockState targetState = null;
-
-                for (int dy = 3; dy >= -5; dy--) {
-                    BlockPos checkPos = playerPos.offset(dx, dy, dz);
-                    BlockState state = level.getBlockState(checkPos);
-                    if (!state.isAir() && !state.getFluidState().isEmpty()) continue;
-                    if (!state.isAir()) {
-                        float hardness = state.getDestroySpeed(level, checkPos);
-                        if (hardness >= 0 && hardness < 50.0f) {
-                            targetPos = checkPos;
-                            targetState = state;
-                            break;
-                        }
-                    }
-                }
-
-                if (targetPos != null && targetState != null) {
-                    FallingBlockEntity fallingBlock = FallingBlockEntityInvoker.invokeConstructor(
-                            level,
-                            targetPos.getX() + 0.5,
-                            targetPos.getY(),
-                            targetPos.getZ() + 0.5,
-                            targetState);
-                    fallingBlock.dropItem = false;
-                    fallingBlock.time = 1;
-
-                    double vx = dx;
-                    double vz = dz;
-                    double dist = Math.sqrt(vx * vx + vz * vz);
-                    if (dist > 0) { vx /= dist; vz /= dist; }
-                    double speed = 0.4 + random.nextDouble() * 0.6;
-                    double vSpeed = 0.1 + random.nextDouble() * 0.15;
-                    fallingBlock.setDeltaMovement(vx * vSpeed, speed, vz * vSpeed);
-                    fallingBlock.hasImpulse = true;
-                    level.addFreshEntity(fallingBlock);
-                    level.destroyBlock(targetPos, false);
-                }
-            }
-        }
+    /** Crater for ramming a ceiling: a dome hollowed out above the player, not below. */
+    public static void destroyTerrainAbove(ServerPlayer player, ServerLevel level, int radius) {
+        Vec3 head = player.getEyePosition();
+        TerrainDestruction.shatterCrater(
+                level,
+                head,
+                radius,
+                head.y - 1.0,      // do not eat the floor far beneath
+                head.y + radius,   // up to the full sphere extent
+                TerrainDestruction.dropChanceFraction(SupersonicConfig.INSTANCE.destructionDropChance),
+                player);
     }
 
     /**
@@ -166,11 +157,10 @@ public record FlightLaunchPayload() implements CustomPacketPayload {
                 for (int dy = 1; dy <= height; dy++) {
                     BlockPos pos = feet.offset(dx, dy, dz);
                     BlockState state = level.getBlockState(pos);
-                    if (state.isAir() || !state.getFluidState().isEmpty()) continue;
-                    float hardness = state.getDestroySpeed(level, pos);
-                    if (hardness >= 0.0f && hardness < 50.0f) {
-                        level.destroyBlock(pos, false);
-                    }
+                    // Same breakability rule as everything else, but no drops and no particles:
+                    // a 64-high shaft of debris would bury the player in items and lag the client.
+                    if (!TerrainDestruction.isBreakable(level, pos, state)) continue;
+                    level.destroyBlock(pos, false);
                 }
             }
         }

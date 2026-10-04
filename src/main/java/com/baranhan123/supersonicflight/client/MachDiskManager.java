@@ -46,6 +46,8 @@ public class MachDiskManager {
 
     private static final List<ShockRing> RINGS = new ArrayList<>();
     private static final Map<UUID, FlightState> PREV_STATE = new HashMap<>();
+    /** Per-player time of the last sonic-entry effect, so terrain scraping cannot spam it. */
+    private static final Map<UUID, Long> LAST_SONIC_ENTRY_FX = new HashMap<>();
 
     @SubscribeEvent
     public static void onClientTick(ClientTickEvent.Post event) {
@@ -53,6 +55,7 @@ public class MachDiskManager {
         if (mc.player == null || mc.level == null) {
             RINGS.clear();
             PREV_STATE.clear();
+            LAST_SONIC_ENTRY_FX.clear();
             return;
         }
 
@@ -85,18 +88,25 @@ public class MachDiskManager {
             }
 
             // Sonic entry — 3 mach disks staggered along the look direction.
+            // Rate limited: scraping terrain flips HOVER↔SONIC repeatedly, and a full ring burst
+            // plus boom on every flip is unreadable. See SonicBoomEffect.SONIC_ENTRY_COOLDOWN_MS.
             if (cur == FlightState.SONIC && prev != FlightState.SONIC) {
-                Vec3 look = player.getLookAngle();
-                Vec3 center = pos.add(0, player.getEyeHeight() * 0.5, 0);
-                Vec3 outward = look.reverse();
-                for (int i = 0; i < 3; i++) {
-                    Vec3 diskPos = center.add(look.scale(i * 4.0));
-                    RINGS.add(new ShockRing(diskPos.x, diskPos.y, diskPos.z, 1.5f, 22.0f, 1200L, now + i * 100L, outward));
-                }
-                spawnParticleRing(center.subtract(look.scale(1.8)), outward, 1.8f, PARTICLE_COUNT);
-                if (mc.player != null) {
-                    mc.player.level().playLocalSound(pos.x, pos.y, pos.z,
-                            ModSounds.SONIC_BOOM.get(), SoundSource.PLAYERS, 4.0f, 0.8f, false);
+                Long lastEntryFx = LAST_SONIC_ENTRY_FX.get(uuid);
+                if (lastEntryFx == null || now - lastEntryFx >= SonicBoomEffect.SONIC_ENTRY_COOLDOWN_MS) {
+                    LAST_SONIC_ENTRY_FX.put(uuid, now);
+
+                    Vec3 look = player.getLookAngle();
+                    Vec3 center = pos.add(0, player.getEyeHeight() * 0.5, 0);
+                    Vec3 outward = look.reverse();
+                    for (int i = 0; i < 3; i++) {
+                        Vec3 diskPos = center.add(look.scale(i * 4.0));
+                        RINGS.add(new ShockRing(diskPos.x, diskPos.y, diskPos.z, 1.5f, 22.0f, 1200L, now + i * 100L, outward));
+                    }
+                    spawnParticleRing(center.subtract(look.scale(1.8)), outward, 1.8f, PARTICLE_COUNT);
+                    if (mc.player != null) {
+                        mc.player.level().playLocalSound(pos.x, pos.y, pos.z,
+                                ModSounds.SONIC_BOOM.get(), SoundSource.PLAYERS, 4.0f, 0.8f, false);
+                    }
                 }
             }
 
