@@ -1,6 +1,7 @@
 package com.baranhan123.supersonicflight.client.mixin;
 
 import com.baranhan123.supersonicflight.util.GrabPunchManager;
+import com.baranhan123.supersonicflight.util.GrabbedEntityIndex;
 import com.baranhan123.supersonicflight.util.SupersonicFlightPlayer;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.math.Axis;
@@ -79,6 +80,9 @@ public abstract class GrabbedEntityRendererMixin2<T extends Entity> {
     }
 
     private static Player getHoldingPlayer(Entity entity) {
+        // Gate first: shouldRender runs for every entity in the world, every frame.
+        if (!GrabbedEntityIndex.contains(entity)) return null;
+
         for (Player player : entity.level().players()) {
             if (player instanceof SupersonicFlightPlayer core && core.getGrabbedTarget() == entity) {
                 return player;

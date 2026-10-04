@@ -1,6 +1,7 @@
 package com.baranhan123.supersonicflight.mixin;
 
 import com.baranhan123.supersonicflight.util.GrabPunchManager;
+import com.baranhan123.supersonicflight.util.GrabbedEntityIndex;
 import com.baranhan123.supersonicflight.util.SupersonicFlightPlayer;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
@@ -38,12 +39,20 @@ public abstract class GrabbedEntityPhysicsMixin {
     }
 
     /**
-     * {@code Entity#push} is a hot path — it runs for every entity collision, every tick, on both
-     * sides — so the scan over players only happens for entities that could possibly be held. The
-     * tag is set the moment a grab starts and cleared on release, so this cannot miss a real grab.
+     * {@code Entity#push} is a hot path — every entity collision, every tick, on both sides — so the
+     * scan over players must only happen for entities that could possibly be held.
+     *
+     * <p>Two cheap gates because the two sides see different data: the {@code SupersonicGrabbed}
+     * tag works on the server (which sets it), but tags are not part of {@code SynchedEntityData}
+     * and so never reach a client — there the per-tick {@link GrabbedEntityIndex} is what answers.
+     * Both are O(1), and either one missing a real grab is impossible: the tag is set the moment a
+     * grab starts, and the index is rebuilt from the same synced target id every tick.
      */
     private static boolean isGrabbed(LivingEntity entity) {
-        if (!entity.getTags().contains(GrabPunchManager.GRABBED_TAG)) return false;
+        if (!entity.getTags().contains(GrabPunchManager.GRABBED_TAG)
+                && !GrabbedEntityIndex.contains(entity)) {
+            return false;
+        }
         if (entity.level() == null) return false;
 
         for (Player player : entity.level().players()) {

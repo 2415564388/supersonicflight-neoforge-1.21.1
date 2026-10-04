@@ -1,5 +1,6 @@
 package com.baranhan123.supersonicflight.client.mixin;
 
+import com.baranhan123.supersonicflight.util.GrabbedEntityIndex;
 import com.baranhan123.supersonicflight.util.SupersonicFlightPlayer;
 import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
 import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
@@ -114,6 +115,10 @@ public abstract class GrabbedEntityRendererMixin<T extends LivingEntity> {
     }
 
     private static Player getHoldingPlayer(LivingEntity entity) {
+        // Gate first: called twice per rendered living entity per frame (render HEAD and the
+        // setupAnim wrapper), so the common "nobody is holding this" case must be O(1).
+        if (!GrabbedEntityIndex.contains(entity)) return null;
+
         for (Player player : entity.level().players()) {
             if (player instanceof SupersonicFlightPlayer core && core.getGrabbedTarget() == entity) {
                 return player;

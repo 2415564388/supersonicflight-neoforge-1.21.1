@@ -3,6 +3,7 @@ package com.baranhan123.supersonicflight.client.mixin;
 import com.baranhan123.supersonicflight.client.SupersonicFlightClient;
 import com.baranhan123.supersonicflight.util.FlightState;
 import com.baranhan123.supersonicflight.util.GrabPunchManager;
+import com.baranhan123.supersonicflight.util.GrabbedEntityIndex;
 import com.baranhan123.supersonicflight.util.SupersonicFlightPlayer;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.math.Axis;
@@ -153,6 +154,10 @@ public abstract class GrabbedEntityPositionMixin {
     }
 
     private static Player getHoldingPlayer(Entity entity) {
+        // Gate first: this runs for every rendered entity, every frame, and the answer is "nobody"
+        // almost always. The index makes that case a single hash lookup instead of a player scan.
+        if (!GrabbedEntityIndex.contains(entity)) return null;
+
         for (Player player : entity.level().players()) {
             if (player instanceof SupersonicFlightPlayer core && core.getGrabbedTarget() == entity) {
                 return player;
