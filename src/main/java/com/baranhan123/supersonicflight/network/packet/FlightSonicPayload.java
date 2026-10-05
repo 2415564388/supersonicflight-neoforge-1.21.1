@@ -9,6 +9,7 @@ import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerPlayer;
+import net.neoforged.neoforge.network.PacketDistributor;
 import net.neoforged.neoforge.network.handling.IPayloadContext;
 
 public record FlightSonicPayload(boolean sonicActive) implements CustomPacketPayload {
@@ -35,11 +36,10 @@ public record FlightSonicPayload(boolean sonicActive) implements CustomPacketPay
                 FlightState current = flightPlayer.getFlightState();
                 if (current == FlightState.NONE || current == FlightState.LAUNCH) return;
 
-                if (payload.sonicActive()) {
-                    flightPlayer.setFlightState(FlightState.SONIC);
-                } else {
-                    flightPlayer.setFlightState(FlightState.HOVER);
-                }
+                FlightState next = payload.sonicActive() ? FlightState.SONIC : FlightState.HOVER;
+                flightPlayer.setFlightState(next);
+                // Immediate, rather than the end-of-tick entity-data batch — see FlightStatePingPayload.
+                PacketDistributor.sendToPlayer(player, new FlightStatePingPayload(next.ordinal()));
             }
         });
     }

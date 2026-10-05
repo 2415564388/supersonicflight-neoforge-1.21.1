@@ -24,3 +24,10 @@ versionRange = "${neo_version_range}"
 modId = "minecraft"
 type = "required"
 versionRange = "${minecraft_version_range}"
+
+# Optional, client-side only: when present, the in-game config screen is offered through the mod
+# list's Config button. Without it the mod is unchanged and that button simply does not appear.
+[[dependencies.${mod_id}]]
+modId = "cloth_config"
+type = "optional"
+versionRange = "[15,)"

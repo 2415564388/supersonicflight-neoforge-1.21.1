@@ -11,6 +11,8 @@ group = mod_group_id
 
 repositories {
     mavenLocal()
+    // Cloth Config API — an optional dependency, see the dependencies block below.
+    maven { url = 'https://maven.shedaniel.me/' }
 }
 
 base {
@@ -59,6 +61,13 @@ allprojects {
 
 dependencies {
     implementation "net.neoforged:neoforge:${neo_version}"
+
+    // Cloth Config API: optional and client-only. compileOnly + runtimeOnly so the config screen
+    // compiles and is testable under `runClient`, but nothing is bundled into the released jar —
+    // the screen is only registered when cloth_config is actually present (see
+    // SupersonicFlightClient#onClientSetup), and without it the mod works exactly as before.
+    compileOnly "me.shedaniel.cloth:cloth-config-neoforge:${cloth_config_version}"
+    runtimeOnly "me.shedaniel.cloth:cloth-config-neoforge:${cloth_config_version}"
 }
 
 tasks.withType(ProcessResources).configureEach {

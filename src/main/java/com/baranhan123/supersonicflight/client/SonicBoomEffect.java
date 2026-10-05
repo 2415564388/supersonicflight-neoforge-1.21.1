@@ -33,18 +33,20 @@ public class SonicBoomEffect {
     /**
      * Minimum gap between two "entered SONIC" effects.
      *
-     * <p>The flight state can legitimately flip HOVER↔SONIC several times a second — the collision
-     * handler drops out of SONIC on contact, and the input handler immediately asks for it again
-     * once the player is clear. Firing a white flash, a ripple, three shockwave rings and a sonic
-     * boom on every one of those flips is unreadable, so the *effect* is rate limited even though
-     * the state change is not.
+     * <p>The flight state can legitimately flip HOVER↔SONIC several times a second: releasing and
+     * re-pressing Ctrl is an ordinary thing to do, and scraping terrain lets the player toggle it
+     * freely (collisions deliberately do <em>not</em> change the flight state — see the collision
+     * block in PlayerEntityMixin). A white flash, a ripple, three shockwave waves and a sonic boom on
+     * every flip is unreadable, so the <em>effect</em> is rate limited even though the state change is
+     * not — but at the old 1500 ms it also swallowed ordinary repeat presses. Short enough now that a
+     * person cannot out-press it, while still collapsing one scrape burst into a single hit.
      */
-    public static final long SONIC_ENTRY_COOLDOWN_MS = 1500L;
+    public static final long SONIC_ENTRY_COOLDOWN_MS = 300L;
     /** Last known window size so the PostChain can be re-sized when the window changes. */
     private static int lastPostChainWidth = -1;
     private static int lastPostChainHeight = -1;
 
-    /** Called by MachDiskManager when ground impact detected */
+    /** Called by FlightShockwaveManager when a real sonic impact is detected */
     public static void triggerImpact() {
         impactTime = System.currentTimeMillis();
     }

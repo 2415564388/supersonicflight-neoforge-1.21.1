@@ -3,7 +3,6 @@ package com.baranhan123.supersonicflight.client.vfx;
 import com.baranhan123.supersonicflight.client.ShockwaveRenderTypes;
 import com.baranhan123.supersonicflight.util.SupersonicFlightPlayer;
 import com.mojang.blaze3d.vertex.VertexConsumer;
-import com.mojang.math.Axis;
 import net.minecraft.client.Camera;
 import net.minecraft.client.Minecraft;
 import net.minecraft.util.Mth;
@@ -20,20 +19,17 @@ import org.joml.Matrix4f;
  *
  * <p>Ported from ViltrumiteCore's {@code PunchVFXManager}. The ring is not a smooth band but a grid
  * of "paint pixels" of decreasing world size, which is what gives the effect its chunky, manga-style
- * look. It is drawn as one quad per lit grid cell, additive-blended, in the plane perpendicular to
- * the punch direction.
+ * look. The geometry itself lives in {@link ShockwaveGrid}, because the flight moments
+ * ({@code FlightShockwaveManager}) draw the same thing.
  *
  * <p>Drawing goes through {@link ShockwaveRenderTypes#additiveQuad()} on
- * {@link RenderLevelStageEvent.Stage#AFTER_LEVEL} — the same path {@code MachDiskManager} uses —
+ * {@link RenderLevelStageEvent.Stage#AFTER_LEVEL} — the same path everything else in-world uses —
  * rather than the reference's raw {@code Tesselator}/{@code BufferBuilder} setup, which is written
  * against an older GL state API.
  */
 @EventBusSubscriber(modid = "supersonicflight", bus = EventBusSubscriber.Bus.GAME, value = Dist.CLIENT)
 public final class PunchVFXManager {
 
-    /** Ring band geometry, in grid cells: lit from just inside the edge outwards. */
-    private static final float BAND_WIDTH = 2.0f;
-    private static final float BAND_FEATHER = 0.3f;
     /** Ring tint — a hot white-blue, matching the reference. */
     private static final int RING_R = 240;
     private static final int RING_G = 250;
@@ -62,6 +58,12 @@ public final class PunchVFXManager {
             if (punchTicks <= 0) continue;
 
             // The punch animation runs 20 ticks; the shockwave only exists for a slice of it.
+            //
+            // Do NOT "fix" the divisor below. `progress` is meant to run 0→1 across the intended
+            // [0.25, 0.65] window, but 0.4f / 1.5f makes it hit 1.0 at time ≈ 0.5167 instead — so
+            // the `time > 0.65f` bound is dead code and the ring finishes expanding after ~8 ticks
+            // rather than ~13. That shorter, snappier expansion is the look this effect is liked
+            // for; correcting the arithmetic changes the effect.
             float time = Mth.clamp((20.0f - (punchTicks - partialTick)) / 20.0f, 0.0f, 1.0f);
             if (time < 0.25f || time > 0.65f) continue;
 
@@ -71,67 +73,39 @@ public final class PunchVFXManager {
             if (buffer == null) {
                 buffer = mc.renderBuffers().bufferSource().getBuffer(ShockwaveRenderTypes.additiveQuad());
             }
-            drawRing(buffer, view, camPos, player, partialTick, progress);
+
+            float radius = Mth.lerp(progress, 0.5f, 6.5f);
+            int alpha = (int) (255.0f * (1.0f - progress));
+
+            // Impact point: eye level, pushed out along the look direction to the fist.
+            double px = Mth.lerp(partialTick, player.xo, player.getX());
+            double py = Mth.lerp(partialTick, player.yo, player.getY());
+            double pz = Mth.lerp(partialTick, player.zo, player.getZ());
+            Vec3 look = player.getViewVector(partialTick);
+            Vec3 impactCenter = new Vec3(px, py + player.getEyeHeight(), pz).add(look.scale(1.5));
+
+            // The ring faces the player's view, built exactly the way the flight waves build theirs:
+            // the plane is perpendicular to `look`, so it pitches with the camera instead of staying
+            // level.
+            //
+            // This replaced a hand-rolled `Ry(-yaw) · Rx(-pitch)` composition whose world normal came
+            // out as (-sinY, cosY·sinP, cosY·cosP) against a look of
+            // (-sinY·cosP, -sinP, cosY·cosP) — the pitch was sign-flipped, so the ring only actually
+            // faced the view when the player was level, and tilted the wrong way otherwise.
+            Matrix4f matrix = ShockwaveGrid.facingTransform(view, impactCenter.subtract(camPos), look);
+
+            // Grid resolution ramps up as the ring expands, so cells shrink and the ring reads as
+            // "painterly" rather than as a fixed-resolution sprite being scaled up.
+            float gridResolution = Math.max(1.0f, Mth.lerp(progress, 4.0f, 32.0f));
+            ShockwaveGrid.emit(buffer, matrix, radius, gridResolution, RING_R, RING_G, RING_B, alpha);
         }
 
-        if (buffer != null) {
-            mc.renderBuffers().bufferSource().endBatch(ShockwaveRenderTypes.additiveQuad());
-        }
-    }
+        if (buffer == null) return;
 
-    private static void drawRing(VertexConsumer buffer, Matrix4f view, Vec3 camPos,
-                                 Player player, float partialTick, float progress) {
-        float radius = Mth.lerp(progress, 0.5f, 6.5f);
-        int alpha = (int) (255.0f * (1.0f - progress));
-
-        // Impact point: mid-body, pushed out along the look direction to the fist.
-        double px = Mth.lerp(partialTick, player.xo, player.getX());
-        double py = Mth.lerp(partialTick, player.yo, player.getY());
-        double pz = Mth.lerp(partialTick, player.zo, player.getZ());
-        Vec3 look = player.getViewVector(partialTick);
-        Vec3 impactCenter = new Vec3(px, py + player.getEyeHeight(), pz).add(look.scale(1.5));
-
-        // The event's model-view matrix already carries the camera's pitch/yaw rotation, so only
-        // the ring's own orientation and the translation to the impact point are left to apply.
-        Matrix4f matrix = new Matrix4f(view);
-        matrix.translate(
-                (float) (impactCenter.x - camPos.x),
-                (float) (impactCenter.y - camPos.y),
-                (float) (impactCenter.z - camPos.z));
-        matrix.rotate(Axis.YP.rotationDegrees(-player.getViewYRot(partialTick)));
-        matrix.rotate(Axis.XP.rotationDegrees(-player.getViewXRot(partialTick)));
-
-        // Grid resolution ramps up as the ring expands, so cells shrink and the ring reads as
-        // "painterly" rather than as a fixed-resolution sprite being scaled up.
-        float gridResolution = Math.max(1.0f, Mth.lerp(progress, 4.0f, 32.0f));
-        float pixelWorldSize = radius / gridResolution;
-        float outerRadius = gridResolution;
-        float innerRadius = Math.max(0.0f, gridResolution - BAND_WIDTH);
-        int loopRadius = (int) gridResolution + 1;
-
-        for (int x = 0; x <= loopRadius; x++) {
-            for (int y = 0; y <= loopRadius; y++) {
-                float dist = (float) Math.sqrt(x * x + y * y);
-                if (dist > outerRadius + BAND_FEATHER || dist < innerRadius - BAND_FEATHER) continue;
-
-                drawPaintPixel(matrix, buffer, x, y, pixelWorldSize, alpha);
-                if (x != 0) drawPaintPixel(matrix, buffer, -x, y, pixelWorldSize, alpha);
-                if (y != 0) drawPaintPixel(matrix, buffer, x, -y, pixelWorldSize, alpha);
-                if (x != 0 && y != 0) drawPaintPixel(matrix, buffer, -x, -y, pixelWorldSize, alpha);
-            }
-        }
-    }
-
-    /** One grid cell of the ring, drawn as a flat quad in the ring's local XY plane. */
-    private static void drawPaintPixel(Matrix4f matrix, VertexConsumer buffer, int gridX, int gridY,
-                                       float pixelScale, int alpha) {
-        float cx = gridX * pixelScale;
-        float cy = gridY * pixelScale;
-        float half = pixelScale * 0.5f;
-
-        buffer.addVertex(matrix, cx - half, cy - half, 0.0f).setColor(RING_R, RING_G, RING_B, alpha);
-        buffer.addVertex(matrix, cx + half, cy - half, 0.0f).setColor(RING_R, RING_G, RING_B, alpha);
-        buffer.addVertex(matrix, cx + half, cy + half, 0.0f).setColor(RING_R, RING_G, RING_B, alpha);
-        buffer.addVertex(matrix, cx - half, cy + half, 0.0f).setColor(RING_R, RING_G, RING_B, alpha);
+        // Deliberately flushed WITHOUT touching the model-view stack, unlike FlightShockwaveManager.
+        // That asymmetry is the original behaviour and this effect's tilt depends on it: the two
+        // managers bake the camera rotation into their vertices by different routes, and "unifying"
+        // them by adding the identity push here visibly changes the punch's ring. Leave it alone.
+        mc.renderBuffers().bufferSource().endBatch(ShockwaveRenderTypes.additiveQuad());
     }
 }

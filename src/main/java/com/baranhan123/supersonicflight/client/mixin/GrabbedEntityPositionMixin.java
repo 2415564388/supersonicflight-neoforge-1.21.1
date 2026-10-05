@@ -60,7 +60,10 @@ public abstract class GrabbedEntityPositionMixin {
         // intersect the hand; in first person it sits exactly on the hand.
         Vec3 lookDir = holdingPlayer.getViewVector(partialTicks).normalize();
         float pushForce = isFirstPerson ? 0.0F : entity.getBbWidth() * 0.6F;
-        Vec3 adjustedHandPos = handPos.add(lookDir.scale(pushForce));
+        // The same sideways pull toward the crosshair axis that the server pins with — both sides
+        // must run it or the drawn model and the server-side hitbox drift apart.
+        Vec3 adjustedHandPos = GrabPunchManager.centerOnAim(
+                holdingPlayer, handPos.add(lookDir.scale(pushForce)), partialTicks);
 
         double renderX = Mth.lerp(partialTicks, entity.xo, entity.getX());
         double renderY = Mth.lerp(partialTicks, entity.yo, entity.getY());

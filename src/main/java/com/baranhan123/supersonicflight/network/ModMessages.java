@@ -12,7 +12,9 @@ public class ModMessages {
 
     @SubscribeEvent
     public static void register(final RegisterPayloadHandlersEvent event) {
-        final PayloadRegistrar registrar = event.registrar("1.1");
+        // "1.1" until FlightStatePingPayload was added; a client and server that disagree about the
+        // payload set must not connect.
+        final PayloadRegistrar registrar = event.registrar("1.2");
 
         registrar.playToServer(
                 FlightTogglePayload.TYPE,
@@ -42,6 +44,15 @@ public class ModMessages {
                 HandPosSyncPayload.TYPE,
                 HandPosSyncPayload.STREAM_CODEC,
                 HandPosSyncPayload::handle
+        );
+
+        // Server -> client, and the only one: sends the new flight state on the same immediate path
+        // the takeoff particles use, instead of the end-of-tick entity-data batch, so the shockwave
+        // lands with the explosion rather than after it.
+        registrar.playToClient(
+                FlightStatePingPayload.TYPE,
+                FlightStatePingPayload.STREAM_CODEC,
+                FlightStatePingPayload::handle
         );
 
     }

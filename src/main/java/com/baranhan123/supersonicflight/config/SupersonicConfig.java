@@ -103,8 +103,16 @@ public class SupersonicConfig {
     @ConfigComment("是否只能抓取敌对生物。关闭后除玩家外的任意生物都能抓。")
     public boolean grabHostileOnly = true;
 
-    @ConfigComment("抓取判定的距离，单位：格（以玩家视线前方为准）。")
+    @ConfigComment("抓取判定的距离，单位：格。搜索范围是以准星为轴、向视线前方延伸的锥形，\n"
+            + "范围内离准星最近的那只生物会被抓住（而不是盒子里随便一只）。")
     public double grabReach = 3.0;
+
+    @ConfigComment("被抓生物在左右方向上拉向准星的程度，取值 0.0 – 1.0。\n"
+            + "0.0 = 保持钉在手部的位置（会偏在手那一侧，也就是偏左一点）；\n"
+            + "1.0 = 完全钉在准星轴线上（生物会挡住正前方视野）。\n"
+            + "只收左右偏移，前后距离不变，所以不改变重拳的手感。\n"
+            + "重拳和松手已不依赖准星判定，这一项纯粹是观感。")
+    public double grabCentering = 0.5;
 
     @ConfigComment("重拳命中的基础伤害。飞行速度越快，实际伤害越高。")
     public float punchBaseDamage = 10.0f;

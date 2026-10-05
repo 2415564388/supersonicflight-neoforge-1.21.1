@@ -19,6 +19,7 @@ import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.damagesource.DamageTypes;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.Vec3;
+import net.neoforged.neoforge.network.PacketDistributor;
 import net.neoforged.neoforge.network.handling.IPayloadContext;
 
 public record FlightLaunchPayload() implements CustomPacketPayload {
@@ -56,10 +57,11 @@ public record FlightLaunchPayload() implements CustomPacketPayload {
             flightPlayer.setTakeoffTicks(10); // 10 ticks of vertical boost
             flightPlayer.setFlightThrottle(1.0f);
 
-            ServerLevel serverLevel = (ServerLevel) player.level();
+            // Same immediate path as the particles just below, so the client's shockwave lands with
+            // the explosion instead of a tick after it.
+            PacketDistributor.sendToPlayer(player, new FlightStatePingPayload(FlightState.LAUNCH.ordinal()));
 
-            // Mach disk spawn signal (handled client-side via state sync)
-            // The client MachDiskManager watches for LAUNCH state transitions
+            ServerLevel serverLevel = (ServerLevel) player.level();
 
             // Launch particles at feet
             serverLevel.sendParticles(ParticleTypes.FLAME,

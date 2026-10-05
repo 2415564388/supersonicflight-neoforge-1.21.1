@@ -70,6 +70,13 @@ public abstract class PlayerEntityMixin extends LivingEntity implements Superson
     @Unique
     private static final EntityDataAccessor<Integer> PUNCH_COOLDOWN =
             SynchedEntityData.defineId(Player.class, EntityDataSerializers.INT);
+    /**
+     * Ticks left on the client's impact shockwave. Deliberately the LAST defineId in this class:
+     * ids are handed out in class-init order, so appending here leaves every existing id untouched.
+     */
+    @Unique
+    private static final EntityDataAccessor<Integer> IMPACT_FX_TICKS =
+            SynchedEntityData.defineId(Player.class, EntityDataSerializers.INT);
 
     @Unique
     private boolean isClientLocalPlayer = false;
@@ -90,6 +97,14 @@ public abstract class PlayerEntityMixin extends LivingEntity implements Superson
     /** Minimum ticks between two sonic impacts (see sonicGroundImpact). */
     @Unique
     private static final int IMPACT_COOLDOWN_TICKS = 20;
+
+    /**
+     * How long the client's impact shockwave lasts. Equal to the impact cooldown on purpose: the
+     * counter is guaranteed to fall back to 0 before another impact can be accepted, which is what
+     * makes the client's "rose above the previous value" edge test unambiguous.
+     */
+    @Unique
+    private static final int IMPACT_FX_DURATION_TICKS = 20;
     @Unique
     private int lastSonicImpactTick = -1000;
     /** Cleared on impact and re-armed once the player is clear of the ground/wall again. */
@@ -137,6 +152,7 @@ public abstract class PlayerEntityMixin extends LivingEntity implements Superson
         builder.define(IS_LEFT_ARM_PUNCH, false);
         builder.define(PUNCH_STRENGTH, 0.0f);
         builder.define(PUNCH_COOLDOWN, 0);
+        builder.define(IMPACT_FX_TICKS, 0);
     }
 
     // --- SupersonicFlightPlayer interface ---
@@ -324,6 +340,16 @@ public abstract class PlayerEntityMixin extends LivingEntity implements Superson
     }
 
     @Override
+    public int getImpactFxTicks() {
+        return getEntityData().get(IMPACT_FX_TICKS);
+    }
+
+    @Override
+    public void setImpactFxTicks(int ticks) {
+        getEntityData().set(IMPACT_FX_TICKS, ticks);
+    }
+
+    @Override
     public Vec3 getServerHandPos() {
         return serverHandPos;
     }
@@ -390,6 +416,14 @@ public abstract class PlayerEntityMixin extends LivingEntity implements Superson
         // Grab / punch run every tick regardless of flight state, so this deliberately sits
         // above the `currentState == NONE` early-return below.
         GrabPunchManager.tick(this, self);
+
+        // Same reason it sits above that early return, and here the placement is load-bearing: a
+        // player who cancels flight inside the impact shockwave's window exits through that return,
+        // so a decrement placed below it would freeze the counter at a positive value — the client's
+        // edge test would never see it fall back to 0, and every later impact would be silent.
+        if (!level().isClientSide() && getImpactFxTicks() > 0) {
+            setImpactFxTicks(getImpactFxTicks() - 1);
+        }
 
         // Handle takeoff ticks (vertical boost during LAUNCH)
         if (getTakeoffTicks() > 0) {
@@ -529,6 +563,10 @@ public abstract class PlayerEntityMixin extends LivingEntity implements Superson
         if (this.tickCount - lastSonicImpactTick < IMPACT_COOLDOWN_TICKS) return;
         sonicImpactArmed = false;
         this.lastSonicImpactTick = this.tickCount;
+        // Tell the client an impact actually happened, so it can spawn the shockwave. There is no
+        // client-bound packet; this rides the same synced entity data as the flight state, and
+        // FlightShockwaveManager edge-detects it rising.
+        setImpactFxTicks(IMPACT_FX_DURATION_TICKS);
 
         // Immune to fall damage
         self.fallDistance = 0;

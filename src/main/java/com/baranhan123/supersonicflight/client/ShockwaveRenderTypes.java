@@ -9,7 +9,8 @@ import net.minecraft.client.renderer.RenderStateShard;
 import net.minecraft.client.renderer.RenderType;
 
 /**
- * Render types shared by the in-world shockwave effects (Mach disks and speed lines).
+ * Render types shared by the in-world shockwave effects (the punch, the flight moment shockwaves
+ * and the speed lines).
  *
  * The rings/lines are drawn as flat {@link DefaultVertexFormat#POSITION_COLOR} quads with an
  * ADDITIVE blend, which makes the effect pop brightly against the sky instead of the standard

@@ -10,6 +10,7 @@
     "FlightCameraMixin",
     "GameRendererMixin",
     "GrabModelMixin",
+    "GrabbedAimTargetMixin",
     "GrabbedEntityPositionMixin",
     "GrabbedEntityRendererMixin",
     "GrabbedEntityRendererMixin2",

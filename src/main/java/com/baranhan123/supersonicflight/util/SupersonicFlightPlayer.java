@@ -71,6 +71,13 @@ public interface SupersonicFlightPlayer {
     int getPunchCooldown();
     void setPunchCooldown(int ticks);
 
+    /**
+     * Ticks remaining on the client's impact shockwave after a <em>real</em> sonic ground or wall
+     * impact (0 = none). Server-set and synced; the client watches it rise.
+     */
+    int getImpactFxTicks();
+    void setImpactFxTicks(int ticks);
+
     /** Server-side hand position (player-relative offset applied to the hand) for holding the target. */
     Vec3 getServerHandPos();
     void setServerHandPos(Vec3 pos);

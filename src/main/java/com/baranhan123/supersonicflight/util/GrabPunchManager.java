@@ -49,6 +49,13 @@ public final class GrabPunchManager {
     /** Tag used to remember that an entity is (or was) held, so the failsafe mixin can clean up. */
     public static final String GRABBED_TAG = "SupersonicGrabbed";
 
+    /**
+     * How far off the crosshair a mob may sit and still be grabbable, as a fraction of
+     * {@code grabReach}. Matches the half-extent of the old axis-aligned search cube, so the reach
+     * feels unchanged — only the sideways corners of that cube are now excluded.
+     */
+    private static final double GRAB_CONE_HALF_WIDTH_FACTOR = 0.5;
+
     /** Cached item lookup so the registry is not hit on every tick / right-click. */
     private static Item cachedGrabItem = null;
     private static String cachedGrabItemId = null;
@@ -187,9 +194,9 @@ public final class GrabPunchManager {
             targetFlight.stopFlight();
         }
 
-        Vec3 handPos = resolveHandPos(core, player);
-        // Hold the victim's body centre at the hand. See holdDrop for why not the neck.
-        target.setPos(handPos.x, handPos.y - holdDrop(target), handPos.z);
+        Vec3 holdPos = resolveHoldPos(core, player);
+        // Hold the victim's body centre at the hold point. See holdDrop for why not the neck.
+        target.setPos(holdPos.x, holdPos.y - holdDrop(target), holdPos.z);
         // Carry the target along at the player's velocity; this is what makes high-speed
         // flight drag the victim instead of leaving it behind.
         target.setDeltaMovement(player.getDeltaMovement());
@@ -207,7 +214,15 @@ public final class GrabPunchManager {
         }
     }
 
-    /** Finds the first grabbable living entity inside the grab box in front of the player. */
+    /**
+     * Picks the grabbable entity the crosshair is actually pointing at, inside a cone in front of
+     * the player.
+     *
+     * <p>This used to return whichever entity {@code getEntities} happened to list first inside an
+     * axis-aligned cube. That cube reached a full reach-block out to the side, so right-clicking one
+     * mob could grab its neighbour, and with several candidates the choice was arbitrary. The cube is
+     * still used to gather candidates cheaply, but the cone and the ray-distance ranking below decide.
+     */
     private static LivingEntity findGrabTarget(SupersonicFlightPlayer core, Player player, ServerLevel level) {
         double reach = Math.max(0.5, SupersonicConfig.INSTANCE.grabReach);
         Vec3 eyePos = player.getEyePosition();
@@ -217,6 +232,13 @@ public final class GrabPunchManager {
         AABB grabBox = new AABB(
                 grabCenter.x - half, grabCenter.y - half, grabCenter.z - half,
                 grabCenter.x + half, grabCenter.y + half, grabCenter.z + half);
+
+        double maxLateral = reach * GRAB_CONE_HALF_WIDTH_FACTOR;
+        double maxLateralSq = maxLateral * maxLateral;
+
+        LivingEntity best = null;
+        double bestLateralSq = Double.MAX_VALUE;
+        double bestDepth = Double.MAX_VALUE;
 
         for (Entity entity : level.getEntities(player, grabBox)) {
             if (!(entity instanceof LivingEntity living) || !living.isAlive()) continue;
@@ -228,9 +250,24 @@ public final class GrabPunchManager {
                 continue;
             }
             if (isGrabbedByAnyone(level, living)) continue;
-            return living;
+
+            // Split the offset to the mob into "along the crosshair" and "off to the side". Only a
+            // mob that is genuinely in front, and inside the cone, is a candidate.
+            Vec3 toMob = living.getBoundingBox().getCenter().subtract(eyePos);
+            double depth = toMob.dot(lookDir);
+            if (depth <= 0.0 || depth > reach) continue;
+
+            double lateralSq = Math.max(0.0, toMob.lengthSqr() - depth * depth);
+            if (lateralSq > maxLateralSq) continue;
+
+            // Closest to the crosshair wins; depth only breaks a tie between two mobs straddling it.
+            if (lateralSq < bestLateralSq || (lateralSq == bestLateralSq && depth < bestDepth)) {
+                bestLateralSq = lateralSq;
+                bestDepth = depth;
+                best = living;
+            }
         }
-        return null;
+        return best;
     }
 
     private static boolean isGrabbedByAnyone(ServerLevel level, LivingEntity entity) {
@@ -247,13 +284,39 @@ public final class GrabPunchManager {
      * {@code HandPosSyncPayload}) because at SONIC speeds an absolute position would be stale
      * by the time it arrived and the victim would visibly trail behind the hand.
      */
-    private static Vec3 resolveHandPos(SupersonicFlightPlayer core, Player player) {
+    private static Vec3 resolveHoldPos(SupersonicFlightPlayer core, Player player) {
         Vec3 offset = core.getServerHandPos();
-        if (offset != null) {
-            return player.position().add(offset);
-        }
-        // Before the first sync arrives, fall back to a point just in front of the eyes.
-        return player.getEyePosition().add(player.getLookAngle().normalize().scale(1.5));
+        Vec3 handPos = offset != null
+                ? player.position().add(offset)
+                // Before the first sync arrives, fall back to a point just in front of the eyes.
+                : player.getEyePosition().add(player.getLookAngle().normalize().scale(1.5));
+        // 1.0F reproduces getEyePosition()/getLookAngle() exactly. The renderer passes the frame's
+        // partial tick to the same helper instead, so its copy stays smooth.
+        return centerOnAim(player, handPos, 1.0F);
+    }
+
+    /**
+     * Pulls {@code point} sideways toward the eye-to-look axis by {@code grabCentering}, without
+     * changing how far ahead of the player it sits.
+     *
+     * <p>0.0 leaves the point exactly on the hand, which is off to the holding side; 1.0 puts it on
+     * the crosshair axis. Only the component perpendicular to the look vector is scaled, so the mob
+     * keeps its forward distance and rises and falls with the player's view — which is what "in front
+     * of the crosshair" means.
+     *
+     * <p>Shared with {@code GrabbedEntityPositionMixin}, which must apply the identical transform or
+     * the drawn model and the server-side hitbox drift apart.
+     */
+    public static Vec3 centerOnAim(Player player, Vec3 point, float partialTicks) {
+        double centering = Mth.clamp(SupersonicConfig.INSTANCE.grabCentering, 0.0, 1.0);
+        if (centering <= 0.0) return point;
+
+        Vec3 eye = player.getEyePosition(partialTicks);
+        Vec3 look = player.getViewVector(partialTicks).normalize();
+        Vec3 toPoint = point.subtract(eye);
+        double depth = toPoint.dot(look);
+        Vec3 lateral = toPoint.subtract(look.scale(depth));
+        return eye.add(look.scale(depth)).add(lateral.scale(1.0 - centering));
     }
 
     /** Smashes the blocks the held entity is dragged through, hurting it as it grinds. */
